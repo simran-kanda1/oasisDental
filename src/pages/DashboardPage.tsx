@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { collection, query, onSnapshot, where, orderBy, limit } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { Card, CardContent } from '../components/ui/card';
 import { useAuth } from '../contexts/AuthContext';
 import { format } from 'date-fns';
 import { cn } from '../lib/utils';

@@ -6,7 +6,7 @@ import { format, startOfMonth, addDays, startOfWeek, addWeeks } from 'date-fns';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { cn } from '../lib/utils';
-import { ChevronLeft, ChevronRight, MessageSquare, CheckCircle2, Clock, ListTodo } from 'lucide-react';
+import { MessageSquare, CheckCircle2, Clock, ListTodo } from 'lucide-react';
 
 interface Task {
     id: string;

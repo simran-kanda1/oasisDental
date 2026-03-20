@@ -6,7 +6,7 @@ import { format } from 'date-fns';
 import { useAuth } from '../contexts/AuthContext';
 import { logActivity } from '../lib/activityLogger';
 import { cn } from '../lib/utils';
-import { MessageSquare, Phone, Mail, User, Clock, CheckCircle2 } from 'lucide-react';
+import { MessageSquare, Phone, Mail, User, Clock } from 'lucide-react';
 
 const InquiriesPage: React.FC = () => {
     const { user, userProfile } = useAuth();
