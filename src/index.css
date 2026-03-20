@@ -1,0 +1,86 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --background: 210 40% 96.1%;
+  /* Slate-100 for better contrast */
+  --foreground: 222 47% 11%;
+  --card: 0 0% 100%;
+  --card-foreground: 222 47% 11%;
+  --primary: 174 72% 41%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 210 40% 96.1%;
+  --secondary-foreground: 222 47% 11.2%;
+  --muted: 210 40% 96.1%;
+  --muted-foreground: 215.4 16.3% 46.9%;
+  --accent: 199 89% 48%;
+  --accent-foreground: 0 0% 100%;
+  --destructive: 0 84.2% 60.2%;
+  --destructive-foreground: 210 40% 98%;
+  --border: 214.3 32% 85%;
+  /* Darker border for visibility */
+  --input: 214.3 32% 85%;
+  --ring: 174 72% 41%;
+  --radius: 0.375rem;
+  /* Reduced rounding for professional look */
+}
+
+body {
+  height: 100%;
+  background-color: #f1f5f9;
+  /* Slate-100 */
+  color: #0f172a;
+  /* Slate-900 */
+  font-family: 'Inter', -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-size: 13px;
+  /* Reduced base font size */
+}
+
+/* Global border color override - Sharper contrast */
+* {
+  border-color: #cbd5e1;
+  /* Slate-300 */
+}
+
+.scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
+#root {
+  height: 100%;
+  min-height: 100vh;
+}
+
+/* High Density Components */
+.card-density {
+  padding: 1rem;
+}
+
+.table-density td,
+.table-density th {
+  padding: 0.5rem 0.75rem;
+}
+
+/* Selection */
+::selection {
+  background: rgba(45, 212, 191, 0.3);
+  color: white;
+}
