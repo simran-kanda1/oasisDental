@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Stethoscope, AlertCircle, ShieldCheck, Lock, Mail } from 'lucide-react';
+import { AlertCircle, ShieldCheck, Lock, Mail } from 'lucide-react';
+import { Tooth } from '../components/ui/icons';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { useAuth } from '../contexts/AuthContext';
@@ -39,7 +40,7 @@ const LoginPage: React.FC = () => {
                 <div className="relative z-10 flex flex-col h-full p-12">
                     <div className="flex items-center gap-3 mb-24">
                         <div className="w-10 h-10 rounded bg-teal-600 flex items-center justify-center shadow-2xl shadow-teal-500/20">
-                            <Stethoscope className="text-white" size={20} />
+                            <Tooth className="text-white" size={20} />
                         </div>
                         <span className="text-lg font-bold text-white tracking-tight uppercase">Oasis Dental</span>
                     </div>

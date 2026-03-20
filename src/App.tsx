@@ -11,6 +11,7 @@ import EmailCampaignsPage from './pages/EmailCampaignsPage';
 import WeaveConnectPage from './pages/WeaveConnectPage';
 import AdminPortalPage from './pages/AdminPortalPage';
 import StaffTasksPage from './pages/StaffTasksPage';
+import { Tooth } from './components/ui/icons';
 
 type Section = 'dashboard' | 'appointments' | 'followups' | 'inquiries' | 'estimates' | 'newsletter' | 'weave' | 'admin' | 'staffTasks';
 
@@ -25,8 +26,8 @@ const AppShell: React.FC = () => {
           <div className="absolute top-[-20%] left-[-20%] w-[150%] h-[150%] bg-gradient-to-br from-teal-50/20 via-white to-blue-50/10 blur-3xl opacity-50" />
         </div>
         <div className="text-center space-y-8 relative z-10">
-          <div className="w-16 h-16 rounded-[2rem] bg-teal-600 flex items-center justify-center mx-auto shadow-2xl shadow-teal-500/20 animate-bounce">
-            <div className="w-2.5 h-2.5 bg-white rounded-full" />
+          <div className="w-16 h-16 rounded bg-teal-600 flex items-center justify-center mx-auto shadow-2xl shadow-teal-500/20 animate-pulse">
+            <Tooth className="text-white" size={32} />
           </div>
           <div className="space-y-2">
             <h1 className="text-2xl font-black text-slate-900 uppercase tracking-tighter">Oasis Dental</h1>
