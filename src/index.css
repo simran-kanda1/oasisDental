@@ -55,6 +55,19 @@ body {
   /* Slate-300 */
 }
 
+/* Improve readability for low-contrast utility shades on white cards */
+.text-slate-300 {
+  color: #64748b !important;
+}
+
+.text-slate-400 {
+  color: #475569 !important;
+}
+
+.text-teal-600\/50 {
+  color: rgba(13, 148, 136, 0.8) !important;
+}
+
 .scrollbar-none {
   scrollbar-width: none;
   -ms-overflow-style: none;

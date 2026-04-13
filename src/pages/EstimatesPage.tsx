@@ -1,47 +1,85 @@
-import React, { useState, useEffect } from 'react';
-import { collection, query, onSnapshot, doc, updateDoc, orderBy } from 'firebase/firestore';
+import React, { useState, useEffect, useMemo } from 'react';
+import { collection, query, onSnapshot, doc, setDoc, orderBy, limit } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import type { FollowUp } from '../types';
 import { Input } from '../components/ui/input';
-import { format, parseISO } from 'date-fns';
 import { useAuth } from '../contexts/AuthContext';
 import { logActivity } from '../lib/activityLogger';
+import { cleanDentrixText, formatDentrixDateKey, formatDentrixTimeLabel, type DentrixAppointmentDoc } from '../lib/dentrix';
+
+interface EstimateRow {
+    id: string;
+    patientId: string;
+    patientName: string;
+    reason: string;
+    provider: string;
+    date: string | null;
+    time: string;
+    amount: number;
+    statusId: number;
+}
 
 const EstimatesPage: React.FC = () => {
     const { user, userProfile } = useAuth();
-    const [estimates, setEstimates] = useState<FollowUp[]>([]);
+    const [appointments, setAppointments] = useState<DentrixAppointmentDoc[]>([]);
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState('');
     const [updatingId, setUpdatingId] = useState<string | null>(null);
 
     useEffect(() => {
-        const q = query(collection(db, 'followUps'), orderBy('lastChanged', 'desc'));
+        const q = query(collection(db, 'appointments'), orderBy('appointment_date', 'desc'), limit(5000));
         const unsub = onSnapshot(q, (snap) => {
-            setEstimates(snap.docs.map(d => ({ id: d.id, ...d.data() } as FollowUp)));
+            setAppointments(snap.docs.map(d => ({ id: d.id, ...d.data() } as DentrixAppointmentDoc)));
             setLoading(false);
         });
         return unsub;
     }, []);
 
-    const handleLogAction = async (e: FollowUp, type: string) => {
-        setUpdatingId(e.id);
-        const ref = doc(db, 'followUps', e.id);
-        await updateDoc(ref, {
+    const estimateRows = useMemo<EstimateRow[]>(() => {
+        return appointments
+            .filter((a) => Number(a.amount ?? 0) > 0 || Number(a.production_type ?? 0) > 0)
+            .slice(0, 600)
+            .map((a) => ({
+                id: `dentrix-${a.id}`,
+                patientId: String(a.patient_id ?? ''),
+                patientName: cleanDentrixText(a.patient_name) || `Patient #${a.patient_id ?? a.id}`,
+                reason: cleanDentrixText(a.reason) || 'Treatment plan',
+                provider: cleanDentrixText(a.provider_id) || 'N/A',
+                date: formatDentrixDateKey(a.appointment_date),
+                time: formatDentrixTimeLabel(a.start_hour, a.start_minute),
+                amount: Number(a.amount ?? 0),
+                statusId: Number(a.status_id ?? 0),
+            }));
+    }, [appointments]);
+
+    const handleLogAction = async (row: EstimateRow, type: string) => {
+        setUpdatingId(row.id);
+        await setDoc(doc(db, 'followUps', row.id), {
+            source: 'dentrix',
+            patient_id: Number(row.patientId),
+            patient_name: row.patientName,
             lastChanged: new Date().toISOString(),
             contactedBy: userProfile?.displayName ?? user?.email ?? 'User',
-            outcome: `${type}: Estimate Sent`
-        });
+            outcome: `${type}: Estimate sent`,
+            status: 'estimate_followup',
+            nextAppointmentBooked: false,
+            category: row.reason,
+            provider_id: row.provider,
+        }, { merge: true });
         await logActivity({
             userId: user!.uid,
             userEmail: user!.email!,
             userName: userProfile?.displayName ?? user!.email!,
-            action: `Sent Estimate: ${e.appointment.patient.name}`,
+            action: `Sent estimate: ${row.patientName}`,
             section: 'Estimates'
         });
         setUpdatingId(null);
     };
 
-    const filtered = estimates.filter(e => e.appointment.patient.name.toLowerCase().includes(search.toLowerCase()));
+    const filtered = estimateRows.filter(e =>
+        e.patientName.toLowerCase().includes(search.toLowerCase()) ||
+        e.reason.toLowerCase().includes(search.toLowerCase()) ||
+        e.patientId.toLowerCase().includes(search.toLowerCase())
+    );
 
     return (
         <div className="p-8 space-y-12 max-w-full mx-auto bg-slate-50/50 font-sans pb-20">
@@ -68,8 +106,8 @@ const EstimatesPage: React.FC = () => {
                         <thead>
                             <tr className="bg-slate-50 border-b border-slate-100/50">
                                 <th className="p-8 text-[10px] font-black text-slate-300 uppercase tracking-[0.3em] pl-12">Patient Name</th>
-                                <th className="p-8 text-[10px] font-black text-slate-300 uppercase tracking-[0.3em]">Clinical Code</th>
-                                <th className="p-8 text-[10px] font-black text-slate-300 uppercase tracking-[0.3em]">Registry Update</th>
+                                <th className="p-8 text-[10px] font-black text-slate-300 uppercase tracking-[0.3em]">Treatment</th>
+                                <th className="p-8 text-[10px] font-black text-slate-300 uppercase tracking-[0.3em]">Schedule / Amount</th>
                                 <th className="p-8 text-[10px] font-black text-slate-300 uppercase tracking-[0.3em] text-right pr-12">Portal Signal</th>
                             </tr>
                         </thead>
@@ -77,17 +115,18 @@ const EstimatesPage: React.FC = () => {
                             {filtered.map(e => (
                                 <tr key={e.id} className="hover:bg-slate-50/50 transition-colors group">
                                     <td className="p-8 pl-12">
-                                        <p className="text-xs font-black text-slate-900 uppercase tracking-tighter leading-none">{e.appointment.patient.name}</p>
-                                        <p className="text-[9px] font-black text-slate-300 uppercase tracking-widest mt-2 opacity-60">ID: {e.appointment.patient.id}</p>
+                                        <p className="text-xs font-black text-slate-900 uppercase tracking-tighter leading-none">{e.patientName}</p>
+                                        <p className="text-[9px] font-black text-slate-300 uppercase tracking-widest mt-2 opacity-60">ID: {e.patientId || 'N/A'}</p>
                                     </td>
                                     <td className="p-8">
-                                        <p className="text-xs font-black text-slate-800 uppercase tracking-tighter leading-none transition-colors group-hover:text-teal-600">{e.code || 'None'}</p>
-                                        <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-2 opacity-60">{e.category || 'General'}</p>
+                                        <p className="text-xs font-black text-slate-800 uppercase tracking-tighter leading-none transition-colors group-hover:text-teal-600">{e.reason}</p>
+                                        <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-2 opacity-60">{e.provider}</p>
                                     </td>
                                     <td className="p-8">
                                         <p className="text-[11px] font-black text-slate-400 uppercase tracking-widest leading-none ml-1 opacity-60">
-                                            {e.lastChanged ? format(parseISO(e.lastChanged), 'MMM d, h:mma') : 'SIGNAL static'}
+                                            {e.date ?? 'N/A'} {e.time}
                                         </p>
+                                        <p className="text-[11px] font-black text-slate-600 uppercase tracking-tight mt-2">${e.amount.toLocaleString()}</p>
                                     </td>
                                     <td className="p-8 pr-12 text-right">
                                         <button

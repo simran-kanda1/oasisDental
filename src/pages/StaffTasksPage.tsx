@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { collection, query, where, onSnapshot, doc, updateDoc, serverTimestamp, setDoc, getDoc } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, doc, updateDoc, serverTimestamp, setDoc, getDoc, orderBy, limit } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { format, startOfMonth, addDays, startOfWeek, addWeeks } from 'date-fns';
@@ -7,6 +7,7 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { cn } from '../lib/utils';
 import { MessageSquare, CheckCircle2, Clock, ListTodo } from 'lucide-react';
+import { navigateToSection } from '../lib/navigation';
 
 interface Task {
     id: string;
@@ -29,6 +30,9 @@ const StaffTasksPage: React.FC = () => {
     const [selectedDate, setSelectedDate] = useState(new Date());
     const [directives, setDirectives] = useState<Task[]>([]);
     const [protocols, setProtocols] = useState<Task[]>([]);
+    const [openFollowUps, setOpenFollowUps] = useState(0);
+    const [openInquiries, setOpenInquiries] = useState(0);
+    const [teamActivity, setTeamActivity] = useState<Array<{ name: string; count: number }>>([]);
     const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
     const [commentDraft, setCommentDraft] = useState('');
 
@@ -74,6 +78,41 @@ const StaffTasksPage: React.FC = () => {
         return () => { unsubD(); unsubP(); unsubSched(); };
     }, [selectedDate, user?.email]);
 
+    useEffect(() => {
+        const unsubFollowups = onSnapshot(query(collection(db, 'followUps'), where('nextAppointmentBooked', '==', false)), (snap) => {
+            setOpenFollowUps(snap.size);
+        });
+        const unsubInquiries = onSnapshot(collection(db, 'wixInquiries'), (snap) => {
+            const open = snap.docs.filter((d) => String(d.data().status ?? '').toLowerCase() !== 'converted').length;
+            setOpenInquiries(open);
+        });
+        return () => {
+            unsubFollowups();
+            unsubInquiries();
+        };
+    }, []);
+
+    useEffect(() => {
+        const unsubLogs = onSnapshot(query(collection(db, 'activityLogs'), orderBy('timestamp', 'desc'), limit(200)), (snap) => {
+            const today = format(new Date(), 'yyyy-MM-dd');
+            const map = new Map<string, number>();
+            snap.docs.forEach((d) => {
+                const row = d.data();
+                if (!row.timestamp?.toDate) return;
+                if (format(row.timestamp.toDate(), 'yyyy-MM-dd') !== today) return;
+                const name = String(row.userName ?? 'Unknown').trim() || 'Unknown';
+                map.set(name, (map.get(name) ?? 0) + 1);
+            });
+            const arr = Array.from(map.entries())
+                .map(([name, count]) => ({ name, count }))
+                .sort((a, b) => b.count - a.count)
+                .slice(0, 4);
+            setTeamActivity(arr);
+        });
+
+        return () => unsubLogs();
+    }, []);
+
     const handleToggleTask = async (task: Task) => {
         const nextStatus = task.status === 'completed' ? 'pending' : 'completed';
         await updateDoc(doc(db, 'tasks', task.id), {
@@ -81,6 +120,15 @@ const StaffTasksPage: React.FC = () => {
             completedAt: nextStatus === 'completed' ? serverTimestamp() : null,
             completedBy: nextStatus === 'completed' ? user?.email : null,
             completedByName: nextStatus === 'completed' ? userProfile?.displayName : null
+        });
+    };
+
+    const handleSetTaskStatus = async (task: Task, status: Task['status']) => {
+        await updateDoc(doc(db, 'tasks', task.id), {
+            status,
+            completedAt: status === 'completed' ? serverTimestamp() : null,
+            completedBy: status === 'completed' ? user?.email : null,
+            completedByName: status === 'completed' ? userProfile?.displayName : null
         });
     };
 
@@ -161,6 +209,20 @@ const StaffTasksPage: React.FC = () => {
     );
 
     const currentWeek = Math.min(4, Math.ceil(selectedDate.getDate() / 7));
+    const priorityRank: Record<Task['priority'], number> = { high: 0, medium: 1, low: 2 };
+    const pendingQueue = [...directives, ...protocols]
+        .filter((t) => t.status !== 'completed')
+        .sort((a, b) => {
+            const priorityDiff = priorityRank[a.priority] - priorityRank[b.priority];
+            if (priorityDiff !== 0) return priorityDiff;
+            if (a.type !== b.type) return a.type === 'directive' ? -1 : 1;
+            return a.title.localeCompare(b.title);
+        });
+    const nextTask = pendingQueue[0];
+    const splitRecommendation =
+        openFollowUps >= openInquiries
+            ? 'Split: Staff A focuses on follow-up calls, Staff B handles inquiries and same-day checklist.'
+            : 'Split: Staff A handles inquiries first, Staff B runs recall calls and booking follow-ups.';
 
     return (
         <div className="p-4 space-y-4 max-w-full mx-auto bg-[#f1f5f9] min-h-screen font-sans">
@@ -211,6 +273,96 @@ const StaffTasksPage: React.FC = () => {
                     </div>
                     <span className="text-slate-300">|</span>
                     <span className="text-teal-600">Cycle Week {currentWeek}</span>
+                </div>
+            </div>
+
+            <div className="bg-white border border-slate-200 rounded-sm p-4">
+                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                    <div>
+                        <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Next Best Action</p>
+                        {nextTask ? (
+                            <div className="mt-2">
+                                <p className="text-sm font-bold text-slate-900">{nextTask.title}</p>
+                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">
+                                    {nextTask.type} • {nextTask.priority} priority
+                                </p>
+                            </div>
+                        ) : openFollowUps > 0 ? (
+                            <div className="mt-2">
+                                <p className="text-sm font-bold text-slate-900">No checklist blockers. Start recall calls.</p>
+                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">
+                                    {openFollowUps} follow-up patients waiting
+                                </p>
+                            </div>
+                        ) : openInquiries > 0 ? (
+                            <div className="mt-2">
+                                <p className="text-sm font-bold text-slate-900">Respond to open website inquiries.</p>
+                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">
+                                    {openInquiries} inquiries pending
+                                </p>
+                            </div>
+                        ) : (
+                            <div className="mt-2">
+                                <p className="text-sm font-bold text-slate-900">All queues are clear right now.</p>
+                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">
+                                    Review tomorrow schedule prep
+                                </p>
+                            </div>
+                        )}
+                    </div>
+                    <div className="flex gap-2 flex-wrap">
+                        {nextTask ? (
+                            <>
+                                {nextTask.status === 'pending' && (
+                                    <Button size="sm" onClick={() => handleSetTaskStatus(nextTask, 'in_progress')} className="h-8 px-3 text-[9px] font-bold uppercase">
+                                        Start Task
+                                    </Button>
+                                )}
+                                <Button size="sm" variant="outline" onClick={() => handleSetTaskStatus(nextTask, 'completed')} className="h-8 px-3 text-[9px] font-bold uppercase">
+                                    Mark Done
+                                </Button>
+                            </>
+                        ) : (
+                            <>
+                                <Button size="sm" onClick={() => navigateToSection('followups')} className="h-8 px-3 text-[9px] font-bold uppercase">
+                                    Open Follow-Ups
+                                </Button>
+                                <Button size="sm" variant="outline" onClick={() => navigateToSection('inquiries')} className="h-8 px-3 text-[9px] font-bold uppercase">
+                                    Open Inquiries
+                                </Button>
+                            </>
+                        )}
+                    </div>
+                </div>
+            </div>
+
+            <div className="bg-white border border-slate-200 rounded-sm p-4 space-y-3">
+                <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">Two-Staff Coordination</p>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <div className="p-3 rounded border border-amber-200 bg-amber-50">
+                        <p className="text-[9px] font-bold text-amber-700 uppercase tracking-widest">Follow-Up Queue</p>
+                        <p className="text-xl font-bold text-amber-900 mt-1">{openFollowUps}</p>
+                    </div>
+                    <div className="p-3 rounded border border-indigo-200 bg-indigo-50">
+                        <p className="text-[9px] font-bold text-indigo-700 uppercase tracking-widest">Inquiry Queue</p>
+                        <p className="text-xl font-bold text-indigo-900 mt-1">{openInquiries}</p>
+                    </div>
+                    <div className="p-3 rounded border border-slate-200 bg-slate-50">
+                        <p className="text-[9px] font-bold text-slate-600 uppercase tracking-widest">Suggested Split</p>
+                        <p className="text-[11px] font-bold text-slate-800 mt-1 leading-snug">{splitRecommendation}</p>
+                    </div>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+                    {teamActivity.length === 0 ? (
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">No activity logged yet today.</p>
+                    ) : (
+                        teamActivity.map((row) => (
+                            <div key={row.name} className="p-2 rounded border border-slate-200 bg-white">
+                                <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest truncate">{row.name}</p>
+                                <p className="text-sm font-bold text-slate-900 mt-1">{row.count} actions</p>
+                            </div>
+                        ))
+                    )}
                 </div>
             </div>
 

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { collection, query, onSnapshot, doc, updateDoc, orderBy, addDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, query, onSnapshot, doc, updateDoc, orderBy } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import type { WixInquiry } from '../types';
 import { format } from 'date-fns';
@@ -14,37 +14,15 @@ const InquiriesPage: React.FC = () => {
     const [loading, setLoading] = useState(true);
     const [updatingId, setUpdatingId] = useState<string | null>(null);
 
-    // Mock data seeding for testing phase
-    const seedMockInquiries = async () => {
-        const mockData = [
-            { name: 'Sarah Johnson', email: 'sarah.j@example.com', phone: '(416) 555-0123', message: 'I need to book a cleaning for next Wednesday.', status: 'pending', submittedAt: new Date().toISOString() },
-            { name: 'Michael Chen', email: 'mchen@example.com', phone: '(905) 555-0987', message: 'Emergency: cracked tooth, can I come in today?', status: 'in_progress', submittedAt: new Date().toISOString() },
-            { name: 'Emma Davis', email: 'emma.d@example.com', phone: '(289) 555-4567', message: 'Looking for teeth whitening options.', status: 'pending', submittedAt: new Date().toISOString() },
-            { name: 'Robert Wilson', email: 'rwilson@example.com', phone: '(416) 555-7890', message: 'Follow up on my quote for the implant procedure.', status: 'pending', submittedAt: new Date().toISOString() },
-        ];
-
-        for (const lead of mockData) {
-            await addDoc(collection(db, 'wixInquiries'), {
-                ...lead,
-                createdAt: serverTimestamp()
-            });
-        }
-    };
-
     useEffect(() => {
         const q = query(collection(db, 'wixInquiries'), orderBy('submittedAt', 'desc'));
         const unsub = onSnapshot(q, (snap) => {
             const data = snap.docs.map(d => ({ id: d.id, ...d.data() } as WixInquiry));
             setInquiries(data);
             setLoading(false);
-
-            // Auto-seed if empty for testing
-            if (data.length === 0 && !loading) {
-                seedMockInquiries();
-            }
         });
         return unsub;
-    }, [loading]);
+    }, []);
 
     const handleStatusUpdate = async (id: string, newStatus: WixInquiry['status']) => {
         setUpdatingId(id);

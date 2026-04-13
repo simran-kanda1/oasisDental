@@ -98,7 +98,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange
                         </div>
                         <div className="min-w-0">
                             <p className="text-[10px] font-black text-slate-900 uppercase truncate">{displayName}</p>
-                            <p className="text-[8px] text-slate-400 font-bold uppercase tracking-widest leading-none mt-1 opacity-60">Staff</p>
+                            <p className="text-[8px] text-slate-400 font-bold uppercase tracking-widest leading-none mt-1 opacity-60">{isAdmin ? 'Admin' : 'Staff'}</p>
                         </div>
                     </div>
                 )}
@@ -152,7 +152,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange
 
 export const TopBar: React.FC<{ section: string }> = ({ section }) => {
     const { userProfile, user, isAdmin } = useAuth();
-    const [notifications, setNotifications] = useState<any[]>([]);
+    const [taskNotifications, setTaskNotifications] = useState<any[]>([]);
+    const [summaryNotifications, setSummaryNotifications] = useState<any[]>([]);
     const [showNotifications, setShowNotifications] = useState(false);
 
     const displayName = userProfile?.displayName ?? user?.email?.split('@')[0] ?? 'User';
@@ -162,16 +163,38 @@ export const TopBar: React.FC<{ section: string }> = ({ section }) => {
         const qTasks = query(collection(db, 'tasks'), where('status', '!=', 'completed'));
         const unsubTasks = onSnapshot(qTasks, (snap) => {
             const items: any[] = [];
-            snap.docs.forEach(doc => {
-                const data = doc.data();
+            snap.docs.forEach((docItem) => {
+                const data = docItem.data();
                 if ((data.type === 'directive' && data.assignedTo === user?.email) || (data.type === 'protocol' && data.date === todayStr)) {
-                    items.push({ id: doc.id, title: data.title, type: 'task' });
+                    items.push({ id: docItem.id, title: data.title, type: 'task' });
                 }
             });
-            setNotifications(items);
+            setTaskNotifications(items);
         });
-        return unsubTasks;
+
+        const unsubFollowups = onSnapshot(query(collection(db, 'followUps'), where('nextAppointmentBooked', '==', false)), (snap) => {
+            setSummaryNotifications(prev => {
+                const rest = prev.filter((x) => x.id !== 'summary-followups');
+                return [...rest, { id: 'summary-followups', title: `${snap.size} patients need follow-up`, type: 'summary' }];
+            });
+        });
+
+        const unsubInquiries = onSnapshot(collection(db, 'wixInquiries'), (snap) => {
+            const open = snap.docs.filter((d) => String(d.data().status ?? '').toLowerCase() !== 'converted').length;
+            setSummaryNotifications(prev => {
+                const rest = prev.filter((x) => x.id !== 'summary-inquiries');
+                return [...rest, { id: 'summary-inquiries', title: `${open} open website inquiries`, type: 'summary' }];
+            });
+        });
+
+        return () => {
+            unsubTasks();
+            unsubFollowups();
+            unsubInquiries();
+        };
     }, [user?.email]);
+
+    const notifications = [...summaryNotifications, ...taskNotifications];
 
     const sectionLabels: Record<string, string> = {
         dashboard: 'Dashboard',

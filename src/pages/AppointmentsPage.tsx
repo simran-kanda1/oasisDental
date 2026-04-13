@@ -1,15 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { collection, query, onSnapshot, orderBy } from 'firebase/firestore';
+import { collection, query, onSnapshot, orderBy, where } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import type { Appointment } from '../types';
 import { Card } from '../components/ui/card';
 import { Button } from '../components/ui/button';
-import { format, startOfWeek, addDays, isSameDay } from 'date-fns';
+import { format, startOfWeek, addDays, isSameDay, endOfDay } from 'date-fns';
 import { cn } from '../lib/utils';
+import type { DentrixAppointmentDoc } from '../lib/dentrix';
+import { cleanDentrixText, formatDentrixDateKey, formatDentrixTimeLabel } from '../lib/dentrix';
 
 const AppointmentsPage: React.FC = () => {
     const [currentDate, setCurrentDate] = useState(new Date());
-    const [appointments, setAppointments] = useState<Appointment[]>([]);
+    const [appointments, setAppointments] = useState<DentrixAppointmentDoc[]>([]);
     const [loading, setLoading] = useState(true);
 
     const weekStart = startOfWeek(currentDate, { weekStartsOn: 1 });
@@ -17,23 +18,35 @@ const AppointmentsPage: React.FC = () => {
     const weekDays = Array.from({ length: 11 }, (_, i) => addDays(weekStart, i)).slice(0, 6);
 
     useEffect(() => {
-        const q = query(collection(db, 'appointments'), orderBy('date', 'asc'));
+        const rangeStart = `${format(weekStart, "yyyy-MM-dd")}T00:00:00Z`;
+        const rangeEnd = endOfDay(addDays(weekStart, 5)).toISOString();
+        const q = query(
+            collection(db, 'appointments'),
+            where('appointment_date', '>=', rangeStart),
+            where('appointment_date', '<=', rangeEnd),
+            orderBy('appointment_date', 'asc')
+        );
         const unsub = onSnapshot(q, (snap) => {
-            setAppointments(snap.docs.map(d => ({ id: d.id, ...d.data() } as Appointment)));
+            const data = snap.docs.map(d => ({ id: d.id, ...d.data() } as DentrixAppointmentDoc));
+            data.sort((a, b) => {
+                const aHour = a.start_hour ?? 0;
+                const bHour = b.start_hour ?? 0;
+                const aMinute = a.start_minute ?? 0;
+                const bMinute = b.start_minute ?? 0;
+                if (aHour !== bHour) return aHour - bHour;
+                return aMinute - bMinute;
+            });
+            setAppointments(data);
             setLoading(false);
         });
         return unsub;
-    }, []);
+    }, [weekStart]);
 
     const getAppointmentsForSlot = (date: Date, hour: number) => {
         const dateStr = format(date, 'yyyy-MM-dd');
         return appointments.filter(appt => {
-            const [time, period] = appt.time.split(' ');
-            const [h] = time.split(':');
-            let apptHour = parseInt(h);
-            if (period === 'PM' && apptHour !== 12) apptHour += 12;
-            if (period === 'AM' && apptHour === 12) apptHour = 0;
-            return appt.date === dateStr && apptHour === hour;
+            const apptDate = formatDentrixDateKey(appt.appointment_date);
+            return apptDate === dateStr && (appt.start_hour ?? -1) === hour;
         });
     };
 
@@ -53,9 +66,9 @@ const AppointmentsPage: React.FC = () => {
                         <Button variant="ghost" className="h-9 px-6 text-[10px] font-black uppercase tracking-widest text-slate-400 hover:text-slate-900 rounded-xl" onClick={() => setCurrentDate(addDays(currentDate, 7))}>Next</Button>
                     </div>
                 </div>
-                <Button className="bg-slate-900 hover:bg-slate-800 text-white font-black rounded-2xl text-[10px] uppercase tracking-[0.2em] px-8 h-12 shadow-xl shadow-slate-900/10 active:scale-[0.98] transition-all">
-                    Add Queue Node
-                </Button>
+                <div className="bg-teal-50 px-4 h-12 rounded-2xl border border-teal-100 text-[10px] font-black uppercase tracking-[0.2em] text-teal-700 flex items-center">
+                    Live Dentrix Schedule
+                </div>
             </div>
 
             <div className="bg-white border border-slate-100 rounded-[2.5rem] shadow-sm overflow-hidden shadow-teal-500/5">
@@ -85,10 +98,19 @@ const AppointmentsPage: React.FC = () => {
                                         <div className="space-y-4">
                                             {getAppointmentsForSlot(day, hour).map((appt) => (
                                                 <Card key={appt.id} className="p-4 bg-white border border-slate-100 rounded-2xl shadow-sm hover:shadow-xl hover:scale-[1.02] hover:border-teal-200 transition-all cursor-pointer border-l-4 border-l-teal-600 overflow-hidden">
-                                                    <p className="text-[11px] font-black text-slate-900 uppercase tracking-tighter leading-none truncate mb-2">{appt.patient.name}</p>
-                                                    <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none opacity-60 truncate">{appt.type}</p>
+                                                    <p className="text-[11px] font-black text-slate-900 uppercase tracking-tighter leading-none truncate mb-2">
+                                                        {cleanDentrixText(appt.patient_name) || 'Unknown Patient'}
+                                                    </p>
+                                                    <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none opacity-60 truncate">
+                                                        {cleanDentrixText(appt.reason) || 'General Appointment'}
+                                                    </p>
                                                     <div className="mt-3 pt-3 border-t border-slate-50 flex items-center justify-between opacity-30 italic">
-                                                        <span className="text-[8px] font-black uppercase tracking-[0.2em]">{appt.provider.split(' ')[1]}</span>
+                                                        <span className="text-[8px] font-black uppercase tracking-[0.2em]">
+                                                            {cleanDentrixText(appt.provider_id) || 'UNASSIGNED'}
+                                                        </span>
+                                                        <span className="text-[8px] font-black uppercase tracking-[0.2em]">
+                                                            {formatDentrixTimeLabel(appt.start_hour, appt.start_minute)}
+                                                        </span>
                                                     </div>
                                                 </Card>
                                             ))}

@@ -1,12 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import {
     collection, addDoc, getDocs, updateDoc, doc, deleteDoc, setDoc,
-    serverTimestamp, query, orderBy, onSnapshot, writeBatch
+    serverTimestamp, query, orderBy, onSnapshot, where
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useAuth } from '../contexts/AuthContext';
-import { RECURRING_TASKS, type RecurringTask } from '../data/tasksSchedule';
-import { mockPatients, mockAppointments, mockFollowUps, mockWixInquiries } from '../data/mockData';
+import { type RecurringTask } from '../data/tasksSchedule';
 import { Card, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -86,7 +85,7 @@ const TaskCard: React.FC<{
 
 const AdminPortalPage: React.FC = () => {
     const { user, userProfile, isAdmin } = useAuth();
-    const [activeTab, setActiveTab] = useState<'tasks' | 'checklist' | 'activity' | 'users' | 'sync'>('tasks');
+    const [activeTab, setActiveTab] = useState<'tasks' | 'checklist' | 'activity' | 'users' | 'operations'>('tasks');
     const [tasks, setTasks] = useState<Task[]>([]);
     const [recurringSchedule, setRecurringSchedule] = useState<RecurringTask[]>([]);
     const [logs, setLogs] = useState<any[]>([]);
@@ -94,9 +93,21 @@ const AdminPortalPage: React.FC = () => {
     const [showAddTask, setShowAddTask] = useState(false);
     const [showAddRecurring, setShowAddRecurring] = useState(false);
     const [loading, setLoading] = useState(true);
-    const [syncing, setSyncing] = useState(false);
     const [activeWeek, setActiveWeek] = useState(1);
     const [newRecurring, setNewRecurring] = useState({ title: '', week: 1, day: 1 });
+    const [opsStats, setOpsStats] = useState({
+        appointments: 0,
+        patients: 0,
+        pendingFollowups: 0,
+        openInquiries: 0
+    });
+    const [lastSyncedAt, setLastSyncedAt] = useState<string>('N/A');
+    const [qualityStats, setQualityStats] = useState({
+        patientsMissingPhone: 0,
+        patientsMissingEmail: 0,
+        appointmentsMissingProvider: 0,
+        stalePatientSyncRecords: 0,
+    });
 
     useEffect(() => {
         const q = query(collection(db, 'tasks'), orderBy('createdAt', 'desc'));
@@ -120,7 +131,7 @@ const AdminPortalPage: React.FC = () => {
     useEffect(() => {
         const fetchUsers = async () => {
             const snap = await getDocs(collection(db, 'users'));
-            setUsers(snap.docs.map(d => d.data() as any));
+            setUsers(snap.docs.map(d => ({ uid: d.id, ...d.data() }) as any));
         };
         fetchUsers();
     }, []);
@@ -172,23 +183,81 @@ const AdminPortalPage: React.FC = () => {
         await deleteDoc(doc(db, 'recurringTaskSchedule', id));
     };
 
-    const handleFullSync = async () => {
-        if (!confirm('Initialize Registry Sync?')) return;
-        setSyncing(true);
-        try {
-            const batch = writeBatch(db);
-            mockPatients.forEach(p => batch.set(doc(db, 'patients', p.id), p));
-            mockAppointments.forEach(a => batch.set(doc(db, 'appointments', a.id), a));
-            mockFollowUps.forEach(f => batch.set(doc(db, 'followUps', f.id), f));
-            mockWixInquiries.forEach(i => batch.set(doc(db, 'wixInquiries', i.id), i));
-            RECURRING_TASKS.forEach(t => batch.set(doc(db, 'recurringTaskSchedule', t.id), t));
-            await batch.commit();
-            alert('Cloud Registry Online.');
-        } catch (err) {
-            alert('Sync Sync Signal Err.');
-        }
-        setSyncing(false);
+    useEffect(() => {
+        const unsubPatients = onSnapshot(collection(db, 'patients'), (snap) => {
+            setOpsStats(prev => ({ ...prev, patients: snap.size }));
+            let missingPhone = 0;
+            let missingEmail = 0;
+            let staleSync = 0;
+            const nowMs = Date.now();
+            const latest = snap.docs
+                .map((d) => String(d.data().last_synced_at ?? ''))
+                .filter(Boolean)
+                .sort()
+                .at(-1);
+            snap.docs.forEach((d) => {
+                const data = d.data();
+                const mobile = String(data.mobile_phone ?? '').trim();
+                const home = String(data.home_phone ?? '').trim();
+                const email = String(data.email ?? '').trim();
+                const lastSync = String(data.last_synced_at ?? '').trim();
+                if (!mobile && !home) missingPhone += 1;
+                if (!email) missingEmail += 1;
+                if (lastSync) {
+                    const syncMs = Date.parse(lastSync);
+                    if (!Number.isNaN(syncMs) && nowMs - syncMs > 1000 * 60 * 60 * 24 * 7) {
+                        staleSync += 1;
+                    }
+                }
+            });
+            if (latest) setLastSyncedAt(latest);
+            setQualityStats(prev => ({
+                ...prev,
+                patientsMissingPhone: missingPhone,
+                patientsMissingEmail: missingEmail,
+                stalePatientSyncRecords: staleSync,
+            }));
+        });
+
+        const unsubAppts = onSnapshot(collection(db, 'appointments'), (snap) => {
+            setOpsStats(prev => ({ ...prev, appointments: snap.size }));
+            const missingProvider = snap.docs.filter((d) => !String(d.data().provider_id ?? '').trim()).length;
+            setQualityStats(prev => ({ ...prev, appointmentsMissingProvider: missingProvider }));
+        });
+
+        const unsubFollowUps = onSnapshot(query(collection(db, 'followUps'), where('nextAppointmentBooked', '==', false)), (snap) => {
+            setOpsStats(prev => ({ ...prev, pendingFollowups: snap.size }));
+        });
+
+        const unsubInquiries = onSnapshot(collection(db, 'wixInquiries'), (snap) => {
+            const open = snap.docs.filter((d) => String(d.data().status ?? '').toLowerCase() !== 'converted').length;
+            setOpsStats(prev => ({ ...prev, openInquiries: open }));
+        });
+
+        return () => {
+            unsubPatients();
+            unsubAppts();
+            unsubFollowUps();
+            unsubInquiries();
+        };
+    }, []);
+
+    const handleUpdateUserRole = async (uid: string, role: 'admin' | 'staff') => {
+        await updateDoc(doc(db, 'users', uid), { role });
     };
+
+    if (!isAdmin) {
+        return (
+            <div className="p-8 max-w-3xl mx-auto">
+                <div className="bg-rose-50 border border-rose-200 rounded-2xl p-6">
+                    <h2 className="text-lg font-black text-rose-700 uppercase tracking-wide">Admin Access Required</h2>
+                    <p className="text-sm text-rose-600 mt-2">
+                        Your account is currently staff-only. Ask an admin to update your role in the Users tab.
+                    </p>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="p-8 space-y-12 max-w-full mx-auto bg-white font-sans pb-20">
@@ -198,7 +267,7 @@ const AdminPortalPage: React.FC = () => {
                     <p className="text-[10px] font-black text-slate-300 uppercase tracking-[0.2em] mt-2">Administrative Core</p>
                 </div>
                 <div className="flex flex-wrap gap-1 bg-slate-50 p-1.5 rounded-2xl border border-slate-100 shadow-sm">
-                    {(['tasks', 'checklist', 'activity', 'users', 'sync'] as const).map(tab => (
+                    {(['tasks', 'checklist', 'activity', 'users', 'operations'] as const).map(tab => (
                         <button key={tab} onClick={() => setActiveTab(tab)} className={cn("px-6 py-2 text-[10px] font-black uppercase tracking-widest leading-none rounded-xl transition-all", activeTab === tab ? "bg-white text-teal-600 shadow-sm border border-slate-100" : "text-slate-400 hover:text-slate-600 hover:bg-white/50")}>
                             {tab}
                         </button>
@@ -208,18 +277,62 @@ const AdminPortalPage: React.FC = () => {
 
             {loading && activeTab === 'tasks' ? <div className="p-40 text-center opacity-10 uppercase text-[10px] font-black tracking-[0.3em]">Syncing...</div> : null}
 
-            {activeTab === 'sync' && (
+            {activeTab === 'operations' && (
                 <div className="max-w-md mx-auto py-20 text-center space-y-8 animate-in zoom-in-95 duration-500">
                     <div className="w-20 h-20 bg-teal-50 rounded-[2.5rem] flex items-center justify-center text-teal-600 mx-auto shadow-sm border border-teal-100">
                         <div className="w-3 h-3 rounded-full bg-current animate-pulse" />
                     </div>
                     <div className="space-y-3">
-                        <h3 className="text-xl font-black text-slate-900 uppercase tracking-tight leading-none">Cloud Initialization</h3>
-                        <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest leading-relaxed opacity-60">Push legacy baseline to Firebase environment.</p>
+                        <h3 className="text-xl font-black text-slate-900 uppercase tracking-tight leading-none">Live Operations</h3>
+                        <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest leading-relaxed opacity-60">
+                            Dentrix-backed environment health and volume.
+                        </p>
                     </div>
-                    <Button onClick={handleFullSync} disabled={syncing} className="w-full h-14 bg-slate-900 hover:bg-slate-800 text-white font-black uppercase text-[11px] tracking-[0.2em] rounded-[1.5rem] shadow-xl shadow-slate-900/10 active:scale-[0.98] transition-all">
-                        {syncing ? 'Synchronizing...' : 'Submit Registry Link'}
-                    </Button>
+                    <div className="grid grid-cols-2 gap-3 text-left">
+                        <div className="p-4 bg-white rounded-2xl border border-slate-100">
+                            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Patients</p>
+                            <p className="text-2xl font-black text-slate-900 mt-2">{opsStats.patients}</p>
+                        </div>
+                        <div className="p-4 bg-white rounded-2xl border border-slate-100">
+                            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Appointments</p>
+                            <p className="text-2xl font-black text-slate-900 mt-2">{opsStats.appointments}</p>
+                        </div>
+                        <div className="p-4 bg-white rounded-2xl border border-slate-100">
+                            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Pending Follow-Ups</p>
+                            <p className="text-2xl font-black text-slate-900 mt-2">{opsStats.pendingFollowups}</p>
+                        </div>
+                        <div className="p-4 bg-white rounded-2xl border border-slate-100">
+                            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Open Inquiries</p>
+                            <p className="text-2xl font-black text-slate-900 mt-2">{opsStats.openInquiries}</p>
+                        </div>
+                    </div>
+                    <div className="p-4 rounded-2xl border border-teal-100 bg-teal-50/50">
+                        <p className="text-[9px] font-black text-teal-700 uppercase tracking-widest">
+                            Last Dentrix sync seen
+                        </p>
+                        <p className="text-[11px] font-black text-teal-900 mt-2 break-all">{lastSyncedAt}</p>
+                    </div>
+                    <div className="w-full p-4 rounded-2xl border border-slate-100 bg-white text-left space-y-3">
+                        <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Data Quality Watch</p>
+                        <div className="grid grid-cols-2 gap-3">
+                            <div className="p-3 rounded-xl bg-amber-50 border border-amber-200">
+                                <p className="text-[9px] font-black text-amber-700 uppercase tracking-widest">Missing Phone</p>
+                                <p className="text-xl font-black text-amber-800 mt-1">{qualityStats.patientsMissingPhone}</p>
+                            </div>
+                            <div className="p-3 rounded-xl bg-amber-50 border border-amber-200">
+                                <p className="text-[9px] font-black text-amber-700 uppercase tracking-widest">Missing Email</p>
+                                <p className="text-xl font-black text-amber-800 mt-1">{qualityStats.patientsMissingEmail}</p>
+                            </div>
+                            <div className="p-3 rounded-xl bg-rose-50 border border-rose-200">
+                                <p className="text-[9px] font-black text-rose-700 uppercase tracking-widest">Missing Provider</p>
+                                <p className="text-xl font-black text-rose-800 mt-1">{qualityStats.appointmentsMissingProvider}</p>
+                            </div>
+                            <div className="p-3 rounded-xl bg-rose-50 border border-rose-200">
+                                <p className="text-[9px] font-black text-rose-700 uppercase tracking-widest">Stale Sync (&gt;7d)</p>
+                                <p className="text-xl font-black text-rose-800 mt-1">{qualityStats.stalePatientSyncRecords}</p>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             )}
 
@@ -370,11 +483,19 @@ const AdminPortalPage: React.FC = () => {
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-6 animate-in slide-in-from-bottom-4 duration-500">
                     {users.map(u => (
                         <Card key={u.uid} className="bg-white border border-slate-50 rounded-[2.5rem] p-8 flex flex-col items-center gap-4 hover:border-teal-300 transition-all shadow-sm hover:shadow-xl hover:shadow-teal-500/5 group">
-                            <div className="w-16 h-16 rounded-[2rem] bg-slate-50 flex items-center justify-center text-slate-400 text-xl font-black uppercase group-hover:bg-teal-600 group-hover:text-white transition-all shadow-inner">{u.displayName[0]}</div>
+                            <div className="w-16 h-16 rounded-[2rem] bg-slate-50 flex items-center justify-center text-slate-400 text-xl font-black uppercase group-hover:bg-teal-600 group-hover:text-white transition-all shadow-inner">{(u.displayName?.[0] ?? 'U').toUpperCase()}</div>
                             <div className="text-center space-y-1">
                                 <p className="text-xs font-black text-slate-900 uppercase truncate tracking-tight">{u.displayName}</p>
-                                <p className="text-[9px] font-bold text-slate-300 uppercase tracking-widest leading-none mt-2 opacity-60 group-hover:text-teal-600/80 transition-colors">{u.role}</p>
+                                <p className="text-[9px] font-bold text-slate-300 uppercase tracking-widest leading-none mt-2 opacity-60 group-hover:text-teal-600/80 transition-colors">{u.email}</p>
                             </div>
+                            <select
+                                value={u.role ?? 'staff'}
+                                onChange={(e) => handleUpdateUserRole(u.uid, e.target.value as 'admin' | 'staff')}
+                                className="w-full h-10 border border-slate-100 bg-slate-50/50 rounded-xl text-[10px] font-black uppercase tracking-widest px-3 outline-none focus:bg-white focus:border-teal-300"
+                            >
+                                <option value="staff">Staff</option>
+                                <option value="admin">Admin</option>
+                            </select>
                         </Card>
                     ))}
                 </div>
