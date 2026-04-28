@@ -4,6 +4,8 @@ export interface RecurringTask {
     description?: string;
     day: number; // 1 (Mon) to 6 (Sat)
     week: number; // 1 to 4
+    /** Optional checklist grouping; derived from title when missing */
+    taskGroup?: string;
 }
 
 export const RECURRING_TASKS: RecurringTask[] = [

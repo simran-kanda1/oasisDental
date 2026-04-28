@@ -7,6 +7,7 @@ import { format, startOfWeek, addDays, isSameDay, endOfDay } from 'date-fns';
 import { cn } from '../lib/utils';
 import type { DentrixAppointmentDoc } from '../lib/dentrix';
 import { cleanDentrixText, formatDentrixDateKey, formatDentrixTimeLabel } from '../lib/dentrix';
+import { PatientProfileTrigger } from '../components/PatientProfileTrigger';
 
 const AppointmentsPage: React.FC = () => {
     const [currentDate, setCurrentDate] = useState(new Date());
@@ -97,10 +98,15 @@ const AppointmentsPage: React.FC = () => {
                                     <div key={dayIdx} className={cn("p-3 border-r border-slate-50 last:border-0 min-h-[140px] transition-colors", isSameDay(day, new Date()) ? "bg-teal-50/5" : "hover:bg-slate-50/30")}>
                                         <div className="space-y-4">
                                             {getAppointmentsForSlot(day, hour).map((appt) => (
-                                                <Card key={appt.id} className="p-4 bg-white border border-slate-100 rounded-2xl shadow-sm hover:shadow-xl hover:scale-[1.02] hover:border-teal-200 transition-all cursor-pointer border-l-4 border-l-teal-600 overflow-hidden">
-                                                    <p className="text-[11px] font-black text-slate-900 uppercase tracking-tighter leading-none truncate mb-2">
-                                                        {cleanDentrixText(appt.patient_name) || 'Unknown Patient'}
-                                                    </p>
+                                                <Card key={appt.id} className="p-4 bg-white border border-slate-100 rounded-2xl shadow-sm hover:shadow-xl hover:scale-[1.02] hover:border-teal-200 transition-all border-l-4 border-l-teal-600 overflow-hidden">
+                                                    <PatientProfileTrigger
+                                                        patientId={appt.patient_id != null ? String(appt.patient_id) : null}
+                                                        className="mb-2 cursor-pointer"
+                                                    >
+                                                        <p className="text-[11px] font-black text-slate-900 uppercase tracking-tighter leading-none truncate">
+                                                            {cleanDentrixText(appt.patient_name) || 'Unknown Patient'}
+                                                        </p>
+                                                    </PatientProfileTrigger>
                                                     <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none opacity-60 truncate">
                                                         {cleanDentrixText(appt.reason) || 'General Appointment'}
                                                     </p>

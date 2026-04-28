@@ -1,73 +1,48 @@
-# React + TypeScript + Vite
+# Oasis Dental Dashboard
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+## Security-first configuration
 
-Currently, two official plugins are available:
+All runtime configuration is env-based. No API keys are hardcoded in source.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+### Frontend env (`.env.local`)
 
-## React Compiler
+Copy `.env.example` and fill:
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- `VITE_FIREBASE_API_KEY`
+- `VITE_FIREBASE_AUTH_DOMAIN`
+- `VITE_FIREBASE_PROJECT_ID`
+- `VITE_FIREBASE_STORAGE_BUCKET`
+- `VITE_FIREBASE_MESSAGING_SENDER_ID`
+- `VITE_FIREBASE_APP_ID`
+- `VITE_FIREBASE_FUNCTIONS_REGION` (optional, defaults to `us-central1`)
 
-## Expanding the ESLint configuration
+`src/lib/firebase.ts` now fails fast if required env vars are missing.
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+### Wix secrets (server-side only)
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+Wix credentials are consumed by Firebase Functions only, not by the browser:
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+firebase functions:secrets:set WIX_API_KEY
+firebase functions:secrets:set WIX_SITE_ID
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+The callable function `syncWixInquiries` handles:
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+- Pulling contacts from Wix
+- Filtering to likely inquiry sources
+- Upserting `wixInquiries`
+- Excluding inquiries whose phone matches an existing patient
+- Removing legacy dummy/seed inquiry rows
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+## Production commands
+
+```bash
+# frontend
+npm run build
+
+# functions
+npm --prefix functions install
+npm run functions:build
+npm run functions:deploy
 ```

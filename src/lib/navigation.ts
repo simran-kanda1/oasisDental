@@ -2,6 +2,8 @@ export type AppSection =
   | 'dashboard'
   | 'appointments'
   | 'followups'
+  | 'followUpOutreach'
+  | 'frontDeskQueues'
   | 'inquiries'
   | 'estimates'
   | 'newsletter'

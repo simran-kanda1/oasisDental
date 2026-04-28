@@ -1,6 +1,10 @@
 import { collection, addDoc, serverTimestamp, query, orderBy, limit, getDocs, where, Timestamp } from 'firebase/firestore';
 import { db } from './firebase';
 
+/** Use with `detail` JSON for dashboard KPIs. */
+export const ACTIVITY_SECTION_RECALL_QUEUE = 'recallQueue';
+export const ACTIVITY_SECTION_FOLLOW_UP_OUTREACH = 'followUpOutreach';
+
 export interface ActivityLog {
     id?: string;
     userId: string;
@@ -10,6 +14,18 @@ export interface ActivityLog {
     section: string;
     detail?: string;
     timestamp?: Timestamp;
+}
+
+export function buildOutreachActivityDetail(payload: {
+    channel: string;
+    reached: string;
+    outcome: string;
+    notes?: string;
+    callbackDate?: string;
+    patientId?: string;
+    queue: 'recall' | 'outreach';
+}): string {
+    return JSON.stringify({ type: 'outreach', ...payload });
 }
 
 export async function logActivity(log: Omit<ActivityLog, 'id' | 'timestamp'>) {

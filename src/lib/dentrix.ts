@@ -13,11 +13,17 @@ export interface DentrixAppointmentDoc {
   patient_guid?: string;
   patient_name?: string;
   reason?: string;
+  /** Dentrix / sync may send appointment category under different keys */
+  appointment_type?: string;
+  appt_type?: string;
+  appointmentType?: string;
   provider_id?: string;
   operatory_id?: string;
   status_id?: number;
   production_type?: number;
   amount?: number;
+  /** When true, estimate was sent — drives Queues vs Estimates page */
+  estimate_sent?: boolean;
 }
 
 export interface DentrixPatientAppointmentInfoDoc {
@@ -44,6 +50,19 @@ export interface DentrixPatientDoc {
   num_of_missed_appointments?: number;
   status?: number;
   last_synced_at?: string;
+  /** Address fields — populated when Dentrix / sync includes them */
+  address_line1?: string;
+  address_line2?: string;
+  city?: string;
+  state?: string;
+  zip?: string;
+  zip_code?: string;
+  /** Free-text notes from patient record (varies by sync) */
+  patient_notes?: string;
+  notes?: string;
+  chart_notes?: string;
+  preferred_contact_method?: string;
+  birth_date?: string;
 }
 
 export interface DentrixFollowUpWorkItem {
@@ -104,6 +123,28 @@ export const getPatientBestPhone = (patient: DentrixPatientDoc): string => {
   return mobile || home || 'N/A';
 };
 
+export const formatPatientAddressBlock = (patient: DentrixPatientDoc): string | null => {
+  const line1 = cleanDentrixText(patient.address_line1);
+  const line2 = cleanDentrixText(patient.address_line2);
+  const cityState = [cleanDentrixText(patient.city), cleanDentrixText(patient.state)].filter(Boolean).join(', ');
+  const zip = cleanDentrixText(patient.zip) || cleanDentrixText(patient.zip_code);
+  const lines = [line1, line2, [cityState, zip].filter(Boolean).join(' ').trim()].filter(Boolean);
+  return lines.length ? lines.join('\n') : null;
+};
+
+export const getPatientNotesBlocks = (
+  patient: DentrixPatientDoc
+): { label: string; text: string }[] => {
+  const blocks: { label: string; text: string }[] = [];
+  const pn = cleanDentrixText(patient.patient_notes);
+  const n = cleanDentrixText(patient.notes);
+  const cn = cleanDentrixText(patient.chart_notes);
+  if (pn) blocks.push({ label: 'Patient notes', text: pn });
+  if (n && n !== pn) blocks.push({ label: 'Notes', text: n });
+  if (cn && cn !== pn && cn !== n) blocks.push({ label: 'Chart notes', text: cn });
+  return blocks;
+};
+
 export const getPatientRiskLevel = (missedAppointments: number): DentrixFollowUpWorkItem['risk'] => {
   if (missedAppointments >= 3) return 'high';
   if (missedAppointments >= 1) return 'medium';
@@ -114,4 +155,9 @@ export const getRiskBadgeClass = (risk: DentrixFollowUpWorkItem['risk']): string
   if (risk === 'high') return 'bg-rose-50 text-rose-700 border-rose-200';
   if (risk === 'medium') return 'bg-amber-50 text-amber-700 border-amber-200';
   return 'bg-emerald-50 text-emerald-700 border-emerald-200';
+};
+
+/** Dentrix `status === 3` means inactive — exclude from operational queues. */
+export const isActiveDentrixPatient = (data: { status?: number }): boolean => {
+  return Number(data.status ?? 0) !== 3;
 };

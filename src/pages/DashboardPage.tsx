@@ -1,13 +1,24 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { collection, query, onSnapshot, where, orderBy, limit } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { format, startOfWeek, addDays, endOfDay, parseISO, isValid } from 'date-fns';
 import { cn } from '../lib/utils';
 import { Activity, AlertTriangle, Calendar, ListTodo, MessageSquare, PhoneCall } from 'lucide-react';
-import type { DentrixAppointmentDoc, DentrixPatientAppointmentInfoDoc } from '../lib/dentrix';
-import { cleanDentrixText, formatDentrixDateKey, formatDentrixTimeLabel, formatPatientFullName, parseDentrixDate } from '../lib/dentrix';
+import type { DentrixAppointmentDoc, DentrixPatientAppointmentInfoDoc, DentrixPatientDoc } from '../lib/dentrix';
+import {
+    cleanDentrixText,
+    formatDentrixDateKey,
+    formatDentrixTimeLabel,
+    formatPatientFullName,
+    isActiveDentrixPatient,
+    parseDentrixDate,
+} from '../lib/dentrix';
+import { isRecallFollowUpDoc, isOpenOutreachItem } from '../lib/followUpQueues';
+import { ACTIVITY_SECTION_RECALL_QUEUE, ACTIVITY_SECTION_FOLLOW_UP_OUTREACH } from '../lib/activityLogger';
 import { navigateToSection } from '../lib/navigation';
+import { PatientProfileTrigger } from '../components/PatientProfileTrigger';
+import { isOpenWixInquiryDoc } from '../lib/wixInquiryCounts';
 
 const DashboardPage: React.FC = () => {
     const { user } = useAuth();
@@ -15,13 +26,15 @@ const DashboardPage: React.FC = () => {
         appointmentsToday: 0,
         appointmentsThisWeek: 0,
         openInquiries: 0,
-        pendingFollowups: 0,
+        pendingRecallQueue: 0,
+        pendingOutreachQueue: 0,
         overdueRecalls: 0,
         highRiskPatients: 0,
         tasksRemaining: 0
     });
     const [todayAppointments, setTodayAppointments] = useState<DentrixAppointmentDoc[]>([]);
-    const [recallPatients, setRecallPatients] = useState<DentrixPatientAppointmentInfoDoc[]>([]);
+    const [apptInfoRows, setApptInfoRows] = useState<DentrixPatientAppointmentInfoDoc[]>([]);
+    const [patientsByKey, setPatientsByKey] = useState<Record<string, DentrixPatientDoc>>({});
     const [quality, setQuality] = useState({
         missingContactPatients: 0,
         missingProviderAppointments: 0,
@@ -34,6 +47,23 @@ const DashboardPage: React.FC = () => {
     const [frontDeskUsers, setFrontDeskUsers] = useState<Array<{ name: string; actions: number }>>([]);
     const [recentActivity, setRecentActivity] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
+
+    const recallDerived = useMemo(() => {
+        const overdue = apptInfoRows.filter((row) => {
+            const missed = row.number_of_missed_appointments ?? 0;
+            const nextDate = row.next_appointment_date;
+            const hasUpcoming = !!parseDentrixDate(nextDate);
+            return missed > 0 && !hasUpcoming;
+        });
+        const activeOverdue = overdue.filter((row) => {
+            const k = String(row.patient_id ?? row.id);
+            const p = patientsByKey[k];
+            if (p && !isActiveDentrixPatient(p)) return false;
+            return true;
+        });
+        activeOverdue.sort((a, b) => (b.number_of_missed_appointments ?? 0) - (a.number_of_missed_appointments ?? 0));
+        return { list: activeOverdue.slice(0, 8), count: activeOverdue.length };
+    }, [apptInfoRows, patientsByKey]);
 
     useEffect(() => {
         const now = new Date();
@@ -78,13 +108,12 @@ const DashboardPage: React.FC = () => {
         );
 
         const unsubInq = onSnapshot(collection(db, 'wixInquiries'), (snap) => {
-            const openCount = snap.docs.filter((d) => {
-                const status = String(d.data().status ?? '').toLowerCase();
-                return status !== 'converted';
-            }).length;
+            const openCount = snap.docs.filter((d) => isOpenWixInquiryDoc(d.data() as Record<string, unknown>)).length;
             const completedRows = snap.docs
                 .map((d) => d.data())
                 .filter((row) => {
+                    const r = row as Record<string, unknown>;
+                    if (r.phoneMatchExcluded === true) return false;
                     const status = String(row.status ?? '').toLowerCase();
                     return status === 'responded' || status === 'converted';
                 })
@@ -104,11 +133,20 @@ const DashboardPage: React.FC = () => {
         });
 
         const unsubFU = onSnapshot(query(collection(db, 'followUps'), where('nextAppointmentBooked', '==', false)), (snap) => {
-            setCounts(prev => ({ ...prev, pendingFollowups: snap.size }));
+            let recall = 0;
+            let outreach = 0;
+            snap.docs.forEach((d) => {
+                const data = d.data() as Record<string, unknown>;
+                if (isOpenOutreachItem(data)) outreach += 1;
+                else if (isRecallFollowUpDoc(data)) recall += 1;
+            });
+            setCounts((prev) => ({ ...prev, pendingRecallQueue: recall, pendingOutreachQueue: outreach }));
         });
 
         const unsubBookedFU = onSnapshot(query(collection(db, 'followUps'), where('nextAppointmentBooked', '==', true)), (snap) => {
             const recallsBookedToday = snap.docs.filter((d) => {
+                const data = d.data() as Record<string, unknown>;
+                if (!isRecallFollowUpDoc(data)) return false;
                 const changed = String(d.data().lastChanged ?? '');
                 if (!changed) return false;
                 const parsed = parseISO(changed);
@@ -119,27 +157,24 @@ const DashboardPage: React.FC = () => {
 
         const unsubPatientApptInfo = onSnapshot(collection(db, 'patient_appointment_info'), (snap) => {
             const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() } as DentrixPatientAppointmentInfoDoc));
-            const overdue = rows.filter((row) => {
-                const missed = row.number_of_missed_appointments ?? 0;
-                const nextDate = row.next_appointment_date;
-                const hasUpcoming = !!parseDentrixDate(nextDate);
-                return missed > 0 && !hasUpcoming;
-            });
-            overdue.sort((a, b) => (b.number_of_missed_appointments ?? 0) - (a.number_of_missed_appointments ?? 0));
-            setRecallPatients(overdue.slice(0, 8));
-            setCounts(prev => ({ ...prev, overdueRecalls: overdue.length }));
+            setApptInfoRows(rows);
         });
 
         const unsubPatients = onSnapshot(collection(db, 'patients'), (snap) => {
-            const highRisk = snap.docs.filter((d) => {
-                const missed = Number(d.data().num_of_missed_appointments ?? 0);
-                return missed >= 2;
-            }).length;
-            const missingContact = snap.docs.filter((d) => {
-                const mobile = String(d.data().mobile_phone ?? '').trim();
-                const home = String(d.data().home_phone ?? '').trim();
-                return !mobile && !home;
-            }).length;
+            const map: Record<string, DentrixPatientDoc> = {};
+            let highRisk = 0;
+            let missingContact = 0;
+            snap.docs.forEach((d) => {
+                const row = { id: d.id, ...d.data() } as DentrixPatientDoc;
+                map[String(row.patient_id ?? row.id)] = row;
+                if (!isActiveDentrixPatient(row)) return;
+                const missed = Number(row.num_of_missed_appointments ?? 0);
+                if (missed >= 2) highRisk += 1;
+                const mobile = String(row.mobile_phone ?? '').trim();
+                const home = String(row.home_phone ?? '').trim();
+                if (!mobile && !home) missingContact += 1;
+            });
+            setPatientsByKey(map);
             setCounts(prev => ({ ...prev, highRiskPatients: highRisk }));
             setQuality(prev => ({ ...prev, missingContactPatients: missingContact }));
         });
@@ -157,8 +192,10 @@ const DashboardPage: React.FC = () => {
             });
 
             const callsMadeToday = todayLogs.filter((log) => {
-                const action = String(log.action ?? '');
-                return String(log.section ?? '') === 'Follow-Ups' && action.toLowerCase().startsWith('follow-up call');
+                const sec = String(log.section ?? '');
+                if (sec !== ACTIVITY_SECTION_RECALL_QUEUE && sec !== ACTIVITY_SECTION_FOLLOW_UP_OUTREACH) return false;
+                const action = String(log.action ?? '').toLowerCase();
+                return action.includes('outreach logged');
             }).length;
 
             const byUser = new Map<string, number>();
@@ -196,11 +233,16 @@ const DashboardPage: React.FC = () => {
         };
     }, [user?.email]);
 
+    useEffect(() => {
+        setCounts((prev) => ({ ...prev, overdueRecalls: recallDerived.count }));
+    }, [recallDerived.count]);
+
     const stats = [
         { label: 'Today Appointments', value: counts.appointmentsToday, icon: Calendar, color: 'text-teal-600', border: 'border-teal-200' },
         { label: 'Week Appointments', value: counts.appointmentsThisWeek, icon: Calendar, color: 'text-blue-600', border: 'border-blue-200' },
         { label: 'Open Inquiries', value: counts.openInquiries, icon: MessageSquare, color: 'text-indigo-600', border: 'border-indigo-200' },
-        { label: 'Follow-Ups', value: counts.pendingFollowups, icon: PhoneCall, color: 'text-amber-600', border: 'border-amber-200' },
+        { label: 'No appt booked queue', value: counts.pendingRecallQueue, icon: PhoneCall, color: 'text-amber-600', border: 'border-amber-200' },
+        { label: 'Follow-up outreach', value: counts.pendingOutreachQueue, icon: PhoneCall, color: 'text-orange-600', border: 'border-orange-200' },
         { label: 'Overdue Recalls', value: counts.overdueRecalls, icon: AlertTriangle, color: 'text-rose-600', border: 'border-rose-200' },
         { label: 'High-Risk Patients', value: counts.highRiskPatients, icon: AlertTriangle, color: 'text-fuchsia-600', border: 'border-fuchsia-200' },
         { label: 'Checklist', value: counts.tasksRemaining, icon: ListTodo, color: 'text-slate-600', border: 'border-slate-300' },
@@ -258,7 +300,12 @@ const DashboardPage: React.FC = () => {
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
                 <div className="bg-white border border-slate-200 rounded-md overflow-hidden xl:col-span-2">
                     <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
-                        <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Today Queue</h3>
+                        <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                            Today Queue
+                            <span className="block font-normal normal-case text-[9px] text-slate-400 tracking-normal mt-0.5">
+                                Tap patient for contact card
+                            </span>
+                        </h3>
                     </div>
                     <div className="divide-y divide-slate-100 max-h-[360px] overflow-y-auto scrollbar-none">
                         {todayAppointments.length === 0 ? (
@@ -269,9 +316,11 @@ const DashboardPage: React.FC = () => {
                                 return (
                                     <div key={appt.id} className="px-4 py-3 flex items-center justify-between gap-3 hover:bg-slate-50">
                                         <div className="min-w-0">
-                                            <p className="text-[11px] font-bold text-slate-800 uppercase truncate">
-                                                {cleanDentrixText(appt.patient_name) || 'Unknown Patient'}
-                                            </p>
+                                            <PatientProfileTrigger patientId={appt.patient_id != null ? String(appt.patient_id) : null}>
+                                                <p className="text-[11px] font-bold text-slate-800 uppercase truncate">
+                                                    {cleanDentrixText(appt.patient_name) || 'Unknown Patient'}
+                                                </p>
+                                            </PatientProfileTrigger>
                                             <p className="text-[9px] text-slate-500 uppercase tracking-wide truncate">
                                                 {cleanDentrixText(appt.reason) || 'General'} • {cleanDentrixText(appt.provider_id) || 'Unassigned'}
                                             </p>
@@ -291,18 +340,25 @@ const DashboardPage: React.FC = () => {
 
                 <div className="bg-white border border-slate-200 rounded-md overflow-hidden">
                     <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
-                        <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Recall Attention Queue</h3>
+                        <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                            Recall Attention Queue
+                            <span className="block font-normal normal-case text-[9px] text-slate-400 tracking-normal mt-0.5">
+                                Tap patient for contact card
+                            </span>
+                        </h3>
                     </div>
                     <div className="divide-y divide-slate-100 max-h-[360px] overflow-y-auto scrollbar-none">
-                        {recallPatients.length === 0 ? (
+                        {recallDerived.list.length === 0 ? (
                             <div className="text-center p-10 opacity-30 text-[10px] uppercase font-bold tracking-widest">No overdue recalls detected</div>
                         ) : (
-                            recallPatients.map((row) => (
+                            recallDerived.list.map((row) => (
                                 <div key={row.id} className="px-4 py-3 flex items-center justify-between gap-3 hover:bg-slate-50">
                                     <div className="min-w-0">
-                                        <p className="text-[11px] font-bold text-slate-800 uppercase truncate">
-                                            {formatPatientFullName(row.first_name, row.last_name) || `Patient #${row.patient_id ?? row.id}`}
-                                        </p>
+                                        <PatientProfileTrigger patientId={row.patient_id != null ? String(row.patient_id) : row.id}>
+                                            <p className="text-[11px] font-bold text-slate-800 uppercase truncate">
+                                                {formatPatientFullName(row.first_name, row.last_name) || `Patient #${row.patient_id ?? row.id}`}
+                                            </p>
+                                        </PatientProfileTrigger>
                                         <p className="text-[9px] text-slate-500 uppercase tracking-wide truncate">
                                             Last visit: {formatDentrixDateKey(row.previous_appointment_date) ?? 'Unknown'}
                                         </p>
@@ -376,7 +432,7 @@ const DashboardPage: React.FC = () => {
                 <div className="px-4 py-3 bg-slate-50 border-b border-slate-200">
                     <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Front Desk Next Best Actions</h3>
                 </div>
-                <div className="p-4 grid grid-cols-1 md:grid-cols-4 gap-3">
+                <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3">
                     <button
                         onClick={() => navigateToSection('staffTasks')}
                         className="p-3 rounded border border-slate-200 bg-slate-50 hover:bg-white text-left transition-colors"
@@ -388,8 +444,15 @@ const DashboardPage: React.FC = () => {
                         onClick={() => navigateToSection('followups')}
                         className="p-3 rounded border border-amber-200 bg-amber-50 hover:bg-white text-left transition-colors"
                     >
-                        <p className="text-[9px] font-bold text-amber-600 uppercase tracking-widest">Call Queue</p>
-                        <p className="text-sm font-bold text-amber-900 mt-1">{counts.pendingFollowups} follow-ups open</p>
+                        <p className="text-[9px] font-bold text-amber-600 uppercase tracking-widest">No appt booked</p>
+                        <p className="text-sm font-bold text-amber-900 mt-1">{counts.pendingRecallQueue} open</p>
+                    </button>
+                    <button
+                        onClick={() => navigateToSection('followUpOutreach')}
+                        className="p-3 rounded border border-orange-200 bg-orange-50 hover:bg-white text-left transition-colors"
+                    >
+                        <p className="text-[9px] font-bold text-orange-600 uppercase tracking-widest">Follow up</p>
+                        <p className="text-sm font-bold text-orange-900 mt-1">{counts.pendingOutreachQueue} open</p>
                     </button>
                     <button
                         onClick={() => navigateToSection('inquiries')}

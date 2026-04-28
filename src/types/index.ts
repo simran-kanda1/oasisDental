@@ -48,6 +48,11 @@ export interface WixInquiry {
     submittedAt: string;
     status: 'new' | 'in_progress' | 'responded' | 'converted';
     assignedTo?: string;
+    /** True when phone matches a Dentrix patient — hidden from inbox and open counts */
+    phoneMatchExcluded?: boolean;
+    wixContactId?: string;
+    lastWixSyncAt?: string;
+    wixSourceType?: string;
 }
 
 export interface EmailCampaign {

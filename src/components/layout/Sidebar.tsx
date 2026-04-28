@@ -3,13 +3,15 @@ import { cn } from '../../lib/utils';
 import {
     LayoutDashboard, Calendar, MessageSquare, PhoneCall, Mail,
     Menu, X, ChevronRight, LogOut, Bell,
-    ClipboardList, ShieldCheck, ListTodo,
+    ClipboardList, ShieldCheck, ListTodo, UsersRound, LayoutList,
 } from 'lucide-react';
 import { Tooth } from '../ui/icons';
 import { useAuth } from '../../contexts/AuthContext';
 import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { format } from 'date-fns';
+import { isRecallFollowUpDoc, isOpenOutreachItem } from '../../lib/followUpQueues';
+import { isOpenWixInquiryDoc } from '../../lib/wixInquiryCounts';
 
 interface SidebarProps {
     activeSection: string;
@@ -20,9 +22,11 @@ const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'staffTasks', label: 'Checklist', icon: ListTodo },
     { id: 'appointments', label: 'Appointments', icon: Calendar },
-    { id: 'followups', label: 'Follow-Ups', icon: PhoneCall },
+    { id: 'frontDeskQueues', label: 'Queues', icon: LayoutList },
+    { id: 'followups', label: 'No appt booked', icon: PhoneCall },
+    { id: 'followUpOutreach', label: 'Follow up', icon: UsersRound },
     { id: 'inquiries', label: 'Inquiries', icon: MessageSquare },
-    { id: 'estimates', label: 'Estimates', icon: ClipboardList },
+    { id: 'estimates', label: 'Est. to send', icon: ClipboardList },
     { id: 'newsletter', label: 'News', icon: Mail },
 ];
 
@@ -173,14 +177,25 @@ export const TopBar: React.FC<{ section: string }> = ({ section }) => {
         });
 
         const unsubFollowups = onSnapshot(query(collection(db, 'followUps'), where('nextAppointmentBooked', '==', false)), (snap) => {
-            setSummaryNotifications(prev => {
-                const rest = prev.filter((x) => x.id !== 'summary-followups');
-                return [...rest, { id: 'summary-followups', title: `${snap.size} patients need follow-up`, type: 'summary' }];
+            let recall = 0;
+            let outreach = 0;
+            snap.docs.forEach((d) => {
+                const data = d.data() as Record<string, unknown>;
+                if (isOpenOutreachItem(data)) outreach += 1;
+                else if (isRecallFollowUpDoc(data)) recall += 1;
+            });
+            setSummaryNotifications((prev) => {
+                const rest = prev.filter((x) => x.id !== 'summary-recall' && x.id !== 'summary-outreach');
+                return [
+                    ...rest,
+                    { id: 'summary-recall', title: `${recall} no follow-up appt booked`, type: 'summary' },
+                    { id: 'summary-outreach', title: `${outreach} follow-up outreach open`, type: 'summary' },
+                ];
             });
         });
 
         const unsubInquiries = onSnapshot(collection(db, 'wixInquiries'), (snap) => {
-            const open = snap.docs.filter((d) => String(d.data().status ?? '').toLowerCase() !== 'converted').length;
+            const open = snap.docs.filter((d) => isOpenWixInquiryDoc(d.data() as Record<string, unknown>)).length;
             setSummaryNotifications(prev => {
                 const rest = prev.filter((x) => x.id !== 'summary-inquiries');
                 return [...rest, { id: 'summary-inquiries', title: `${open} open website inquiries`, type: 'summary' }];
@@ -200,9 +215,11 @@ export const TopBar: React.FC<{ section: string }> = ({ section }) => {
         dashboard: 'Dashboard',
         staffTasks: 'Checklist',
         appointments: 'Appointments',
-        followups: 'Follow-Ups',
+        frontDeskQueues: 'Front desk queues',
+        followups: 'No follow up appt booked',
+        followUpOutreach: 'Follow up',
         inquiries: 'Inquiries',
-        estimates: 'Estimates',
+        estimates: 'Estimates to send',
         newsletter: 'News',
         admin: 'Admin',
     };

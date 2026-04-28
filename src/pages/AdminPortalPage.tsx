@@ -6,6 +6,10 @@ import {
 import { db } from '../lib/firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { type RecurringTask } from '../data/tasksSchedule';
+import { isActiveDentrixPatient } from '../lib/dentrix';
+import { isRecallFollowUpDoc, isOpenOutreachItem } from '../lib/followUpQueues';
+import { isOpenWixInquiryDoc } from '../lib/wixInquiryCounts';
+import { deriveTaskGroupFromTitle } from '../lib/taskGroups';
 import { Card, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -98,7 +102,9 @@ const AdminPortalPage: React.FC = () => {
     const [opsStats, setOpsStats] = useState({
         appointments: 0,
         patients: 0,
-        pendingFollowups: 0,
+        activePatients: 0,
+        pendingRecallQueue: 0,
+        pendingOutreachQueue: 0,
         openInquiries: 0
     });
     const [lastSyncedAt, setLastSyncedAt] = useState<string>('N/A');
@@ -159,7 +165,11 @@ const AdminPortalPage: React.FC = () => {
     const handleAddRecurring = async (e: React.FormEvent) => {
         e.preventDefault();
         const id = `rec-${Date.now()}`;
-        await setDoc(doc(db, 'recurringTaskSchedule', id), { id, ...newRecurring });
+        await setDoc(doc(db, 'recurringTaskSchedule', id), {
+            id,
+            ...newRecurring,
+            taskGroup: deriveTaskGroupFromTitle(newRecurring.title),
+        });
         setNewRecurring({ title: '', week: 1, day: 1 });
         setShowAddRecurring(false);
     };
@@ -185,7 +195,11 @@ const AdminPortalPage: React.FC = () => {
 
     useEffect(() => {
         const unsubPatients = onSnapshot(collection(db, 'patients'), (snap) => {
-            setOpsStats(prev => ({ ...prev, patients: snap.size }));
+            let active = 0;
+            snap.docs.forEach((d) => {
+                if (isActiveDentrixPatient(d.data() as { status?: number })) active += 1;
+            });
+            setOpsStats(prev => ({ ...prev, patients: snap.size, activePatients: active }));
             let missingPhone = 0;
             let missingEmail = 0;
             let staleSync = 0;
@@ -197,6 +211,7 @@ const AdminPortalPage: React.FC = () => {
                 .at(-1);
             snap.docs.forEach((d) => {
                 const data = d.data();
+                if (!isActiveDentrixPatient(data as { status?: number })) return;
                 const mobile = String(data.mobile_phone ?? '').trim();
                 const home = String(data.home_phone ?? '').trim();
                 const email = String(data.email ?? '').trim();
@@ -226,11 +241,18 @@ const AdminPortalPage: React.FC = () => {
         });
 
         const unsubFollowUps = onSnapshot(query(collection(db, 'followUps'), where('nextAppointmentBooked', '==', false)), (snap) => {
-            setOpsStats(prev => ({ ...prev, pendingFollowups: snap.size }));
+            let recall = 0;
+            let outreach = 0;
+            snap.docs.forEach((d) => {
+                const data = d.data() as Record<string, unknown>;
+                if (isOpenOutreachItem(data)) outreach += 1;
+                else if (isRecallFollowUpDoc(data)) recall += 1;
+            });
+            setOpsStats(prev => ({ ...prev, pendingRecallQueue: recall, pendingOutreachQueue: outreach }));
         });
 
         const unsubInquiries = onSnapshot(collection(db, 'wixInquiries'), (snap) => {
-            const open = snap.docs.filter((d) => String(d.data().status ?? '').toLowerCase() !== 'converted').length;
+            const open = snap.docs.filter((d) => isOpenWixInquiryDoc(d.data() as Record<string, unknown>)).length;
             setOpsStats(prev => ({ ...prev, openInquiries: open }));
         });
 
@@ -288,18 +310,23 @@ const AdminPortalPage: React.FC = () => {
                             Dentrix-backed environment health and volume.
                         </p>
                     </div>
-                    <div className="grid grid-cols-2 gap-3 text-left">
+                    <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 text-left">
                         <div className="p-4 bg-white rounded-2xl border border-slate-100">
-                            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Patients</p>
-                            <p className="text-2xl font-black text-slate-900 mt-2">{opsStats.patients}</p>
+                            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Patients (active)</p>
+                            <p className="text-2xl font-black text-slate-900 mt-2">{opsStats.activePatients}</p>
+                            <p className="text-[8px] font-bold text-slate-400 mt-1 uppercase">Total in Firestore: {opsStats.patients}</p>
                         </div>
                         <div className="p-4 bg-white rounded-2xl border border-slate-100">
                             <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Appointments</p>
                             <p className="text-2xl font-black text-slate-900 mt-2">{opsStats.appointments}</p>
                         </div>
                         <div className="p-4 bg-white rounded-2xl border border-slate-100">
-                            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Pending Follow-Ups</p>
-                            <p className="text-2xl font-black text-slate-900 mt-2">{opsStats.pendingFollowups}</p>
+                            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">No appt booked</p>
+                            <p className="text-2xl font-black text-slate-900 mt-2">{opsStats.pendingRecallQueue}</p>
+                        </div>
+                        <div className="p-4 bg-white rounded-2xl border border-slate-100">
+                            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Follow-up outreach</p>
+                            <p className="text-2xl font-black text-slate-900 mt-2">{opsStats.pendingOutreachQueue}</p>
                         </div>
                         <div className="p-4 bg-white rounded-2xl border border-slate-100">
                             <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Open Inquiries</p>

@@ -3,9 +3,15 @@ import { collection, doc, onSnapshot, query, setDoc, limit, orderBy } from 'fire
 import { db } from '../lib/firebase';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
-import { format } from 'date-fns';
 import { useAuth } from '../contexts/AuthContext';
-import { logActivity } from '../lib/activityLogger';
+import {
+    logActivity,
+    ACTIVITY_SECTION_RECALL_QUEUE,
+    buildOutreachActivityDetail,
+} from '../lib/activityLogger';
+import { FOLLOW_UP_QUEUE_RECALL, isRecallFollowUpDoc } from '../lib/followUpQueues';
+import { LogOutreachModal, type OutreachLogPayload } from '../components/LogOutreachModal';
+import { PatientProfileTrigger } from '../components/PatientProfileTrigger';
 import {
     cleanDentrixText,
     formatDentrixDateKey,
@@ -14,6 +20,7 @@ import {
     getPatientBestPhone,
     getPatientRiskLevel,
     getRiskBadgeClass,
+    isActiveDentrixPatient,
     type DentrixAppointmentDoc,
     type DentrixFollowUpWorkItem,
     type DentrixPatientAppointmentInfoDoc,
@@ -31,12 +38,12 @@ interface FollowUpTrackingDoc {
     nextAppointmentBooked?: boolean;
     nextAppointmentDate?: string;
     source?: string;
+    queue?: string;
+    outreachHistory?: Array<Record<string, unknown>>;
+    lastOutreach?: Record<string, unknown>;
 }
 
 type BookingDraft = { date: string; type: string };
-
-const ACTION_BUTTON_CLASS =
-    'h-8 px-3 rounded-xl border border-slate-100 text-[10px] font-black uppercase tracking-widest flex items-center justify-center transition-all bg-white hover:bg-slate-50 text-slate-400 hover:text-teal-600 disabled:opacity-50';
 
 const FollowUpsPage: React.FC = () => {
     const { user, userProfile } = useAuth();
@@ -55,6 +62,7 @@ const FollowUpsPage: React.FC = () => {
     const [patientInfoById, setPatientInfoById] = useState<Record<string, DentrixPatientAppointmentInfoDoc>>({});
     const [latestAppointmentByPatientId, setLatestAppointmentByPatientId] = useState<Record<string, DentrixAppointmentDoc>>({});
     const [trackingByPatientId, setTrackingByPatientId] = useState<Record<string, FollowUpTrackingDoc>>({});
+    const [logModalItem, setLogModalItem] = useState<(DentrixFollowUpWorkItem & { trackingId: string; tracking?: FollowUpTrackingDoc }) | null>(null);
 
     useEffect(() => {
         const unsubPatients = onSnapshot(collection(db, 'patients'), (snap) => {
@@ -97,6 +105,7 @@ const FollowUpsPage: React.FC = () => {
                 const row = { id: d.id, ...d.data() } as FollowUpTrackingDoc;
                 if (row.source !== 'dentrix') return;
                 if (typeof row.patient_id !== 'number') return;
+                if (!isRecallFollowUpDoc(row as unknown as Record<string, unknown>)) return;
                 map[String(row.patient_id)] = row;
             });
             setTrackingByPatientId(map);
@@ -121,6 +130,8 @@ const FollowUpsPage: React.FC = () => {
             if (nextAppt) return;
 
             const patient = patientsById[patientKey];
+            if (patient && !isActiveDentrixPatient(patient)) return;
+
             const latestAppt = latestAppointmentByPatientId[patientKey];
             const tracking = trackingByPatientId[patientKey];
 
@@ -190,6 +201,7 @@ const FollowUpsPage: React.FC = () => {
             patient_guid: item.patientGuid,
             patient_name: item.patientName,
             source: 'dentrix',
+            queue: FOLLOW_UP_QUEUE_RECALL,
             lastChanged: new Date().toISOString(),
             contactedBy: userProfile?.displayName ?? user?.email ?? 'User',
             ...patch,
@@ -197,28 +209,54 @@ const FollowUpsPage: React.FC = () => {
         await setDoc(doc(db, 'followUps', item.trackingId), payload, { merge: true });
     };
 
-    const logAction = async (
+    const saveOutreachLog = async (
         item: DentrixFollowUpWorkItem & { trackingId: string; tracking?: FollowUpTrackingDoc },
-        action: string,
-        extra?: string
+        payload: OutreachLogPayload
     ) => {
         setUpdatingId(item.patientId);
+        const entry = {
+            at: new Date().toISOString(),
+            channel: payload.channel,
+            reached: payload.reached,
+            outcome: payload.outcome,
+            notes: payload.notes,
+            callbackDate: payload.callbackDate || null,
+            by: userProfile?.displayName ?? user?.email ?? 'User',
+        };
+        const prevHistory = Array.isArray(item.tracking?.outreachHistory) ? item.tracking!.outreachHistory! : [];
+        const outreachHistory = [...prevHistory, entry].slice(-25);
+        const summary = `${payload.channel} / ${payload.reached}${payload.outcome ? ` — ${payload.outcome}` : ''}`;
         await upsertTracking(item, {
-            status: action.toLowerCase(),
-            outcome: extra ? `${action}: ${extra}` : action,
-            followUpDate: action === 'Later' ? extra : undefined,
+            status: 'contacted',
+            outcome: summary,
+            followUpDate: payload.callbackDate || undefined,
             nextAppointmentBooked: false,
+            lastOutreach: entry,
+            outreachHistory,
+            notes: payload.notes.trim()
+                ? [item.tracking?.notes, payload.notes].filter(Boolean).join('\n---\n')
+                : item.tracking?.notes,
         });
         if (user?.uid && user.email) {
             await logActivity({
                 userId: user.uid,
                 userEmail: user.email,
                 userName: userProfile?.displayName ?? user.email,
-                action: `Follow-up ${action}: ${item.patientName}`,
-                section: 'Follow-Ups',
+                action: `Outreach logged: ${item.patientName}`,
+                section: ACTIVITY_SECTION_RECALL_QUEUE,
+                detail: buildOutreachActivityDetail({
+                    channel: payload.channel,
+                    reached: payload.reached,
+                    outcome: payload.outcome,
+                    notes: payload.notes,
+                    callbackDate: payload.callbackDate,
+                    patientId: item.patientId,
+                    queue: 'recall',
+                }),
             });
         }
         setUpdatingId(null);
+        setLogModalItem(null);
     };
 
     const saveNote = async (item: DentrixFollowUpWorkItem & { trackingId: string; tracking?: FollowUpTrackingDoc }) => {
@@ -237,6 +275,7 @@ const FollowUpsPage: React.FC = () => {
         setUpdatingId(item.patientId);
         await upsertTracking(item, {
             status: 'completed',
+            queue: FOLLOW_UP_QUEUE_RECALL,
             nextAppointmentBooked: true,
             nextAppointmentDate: bookingDraft.date,
             outcome: `Booked: ${bookingDraft.type} on ${bookingDraft.date}`,
@@ -253,8 +292,10 @@ const FollowUpsPage: React.FC = () => {
         <div className="p-8 space-y-12 max-w-full mx-auto bg-white font-sans pb-20">
             <div className="flex flex-col md:flex-row items-center justify-between gap-6 border-b pb-8 border-slate-100 px-2">
                 <div>
-                    <h1 className="text-3xl font-black text-slate-900 tracking-tighter uppercase leading-none">Follow Ups</h1>
-                    <p className="text-[10px] font-black text-slate-300 uppercase tracking-[0.2em] mt-2">{items.length} Recall Patients Need Outreach</p>
+                    <h1 className="text-3xl font-black text-slate-900 tracking-tighter uppercase leading-none">No follow up appt booked</h1>
+                    <p className="text-[10px] font-black text-slate-300 uppercase tracking-[0.2em] mt-2">
+                        {items.length} active patients with missed visits and no next appointment
+                    </p>
                 </div>
                 <div className="relative w-full md:max-w-xs transition-all">
                     <Input
@@ -313,11 +354,16 @@ const FollowUpsPage: React.FC = () => {
                         <table className="w-full text-left border-collapse min-w-[1300px]">
                             <thead>
                                 <tr className="bg-slate-50 border-b border-slate-100/50">
-                                    <th className="p-6 text-[10px] font-black text-slate-300 uppercase tracking-[0.2em] pl-10">Patient</th>
+                                    <th className="p-6 text-[10px] font-black text-slate-300 uppercase tracking-[0.2em] pl-10">
+                                        Patient
+                                        <span className="block font-normal normal-case text-[9px] text-slate-400 tracking-normal mt-1">
+                                            Tap name for contact card
+                                        </span>
+                                    </th>
                                     <th className="p-6 text-[10px] font-black text-slate-300 uppercase tracking-[0.2em]">Risk</th>
                                     <th className="p-6 text-[10px] font-black text-slate-300 uppercase tracking-[0.2em]">Missed</th>
                                     <th className="p-6 text-[10px] font-black text-slate-300 uppercase tracking-[0.2em]">Last Appointment</th>
-                                    <th className="p-6 text-[10px] font-black text-slate-300 uppercase tracking-[0.2em]">Outreach Actions</th>
+                                    <th className="p-6 text-[10px] font-black text-slate-300 uppercase tracking-[0.2em]">Outreach</th>
                                     <th className="p-6 text-[10px] font-black text-slate-300 uppercase tracking-[0.2em]">Notes / Outcome</th>
                                     <th className="p-6 text-[10px] font-black text-slate-300 uppercase tracking-[0.2em] pr-10 text-right">Booking</th>
                                 </tr>
@@ -326,10 +372,14 @@ const FollowUpsPage: React.FC = () => {
                                 {filtered.map((item) => (
                                     <tr key={item.patientId} className="hover:bg-slate-50/50 transition-colors group">
                                         <td className="p-6 pl-10">
-                                            <div className="text-xs font-black text-slate-900 uppercase tracking-tighter truncate leading-none">{item.patientName}</div>
-                                            <div className="text-[9px] font-black text-slate-300 uppercase tracking-widest mt-1.5 opacity-60 leading-none">
-                                                ID {item.patientId} • {item.phone}
-                                            </div>
+                                            <PatientProfileTrigger patientId={item.patientId}>
+                                                <div className="text-xs font-black text-slate-900 uppercase tracking-tighter truncate leading-none">
+                                                    {item.patientName}
+                                                </div>
+                                                <div className="text-[9px] font-black text-slate-300 uppercase tracking-widest mt-1.5 opacity-60 leading-none pointer-events-none">
+                                                    ID {item.patientId} • {item.phone}
+                                                </div>
+                                            </PatientProfileTrigger>
                                         </td>
                                         <td className="p-6">
                                             <span className={`inline-flex h-8 items-center px-3 rounded-xl border text-[9px] font-black uppercase tracking-widest ${getRiskBadgeClass(item.risk)}`}>
@@ -349,12 +399,15 @@ const FollowUpsPage: React.FC = () => {
                                             </p>
                                         </td>
                                         <td className="p-6">
-                                            <div className="flex flex-wrap items-center gap-2">
-                                                <button onClick={() => logAction(item, 'Call')} disabled={!!updatingId} className={ACTION_BUTTON_CLASS}>Call</button>
-                                                <button onClick={() => logAction(item, 'VM')} disabled={!!updatingId} className={ACTION_BUTTON_CLASS}>VM</button>
-                                                <button onClick={() => logAction(item, 'Text')} disabled={!!updatingId} className={ACTION_BUTTON_CLASS}>Text</button>
-                                                <button onClick={() => logAction(item, 'Later', format(new Date(), 'yyyy-MM-dd'))} disabled={!!updatingId} className={ACTION_BUTTON_CLASS}>Later</button>
-                                            </div>
+                                            <Button
+                                                size="sm"
+                                                variant="outline"
+                                                disabled={!!updatingId}
+                                                onClick={() => setLogModalItem(item)}
+                                                className="h-9 px-4 text-[9px] font-black uppercase tracking-widest rounded-xl border-slate-200"
+                                            >
+                                                Log follow-up
+                                            </Button>
                                         </td>
                                         <td className="p-6">
                                             <div className="max-w-[320px]">
@@ -411,6 +464,17 @@ const FollowUpsPage: React.FC = () => {
                     </div>
                 </>
             )}
+
+            <LogOutreachModal
+                open={!!logModalItem}
+                patientLabel={logModalItem ? `${logModalItem.patientName} · ID ${logModalItem.patientId}` : ''}
+                onClose={() => setLogModalItem(null)}
+                onSave={async (payload) => {
+                    if (!logModalItem) return;
+                    await saveOutreachLog(logModalItem, payload);
+                }}
+                saving={!!logModalItem && updatingId === logModalItem.patientId}
+            />
 
             {selectedForBooking && (
                 <>

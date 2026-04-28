@@ -1,13 +1,24 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { collection, query, onSnapshot, doc, setDoc, orderBy, limit } from 'firebase/firestore';
+import { collection, query, onSnapshot, doc, setDoc, updateDoc, orderBy, limit } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { Input } from '../components/ui/input';
 import { useAuth } from '../contexts/AuthContext';
 import { logActivity } from '../lib/activityLogger';
-import { cleanDentrixText, formatDentrixDateKey, formatDentrixTimeLabel, type DentrixAppointmentDoc } from '../lib/dentrix';
+import { FOLLOW_UP_QUEUE_OUTREACH } from '../lib/followUpQueues';
+import {
+    cleanDentrixText,
+    formatDentrixDateKey,
+    formatDentrixTimeLabel,
+    isActiveDentrixPatient,
+    type DentrixAppointmentDoc,
+    type DentrixPatientDoc,
+} from '../lib/dentrix';
+import { isEstimateSent } from '../lib/appointmentHeuristics';
+import { PatientProfileTrigger } from '../components/PatientProfileTrigger';
 
 interface EstimateRow {
     id: string;
+    appointmentDocId: string;
     patientId: string;
     patientName: string;
     reason: string;
@@ -21,6 +32,7 @@ interface EstimateRow {
 const EstimatesPage: React.FC = () => {
     const { user, userProfile } = useAuth();
     const [appointments, setAppointments] = useState<DentrixAppointmentDoc[]>([]);
+    const [patientsById, setPatientsById] = useState<Record<string, DentrixPatientDoc>>({});
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState('');
     const [updatingId, setUpdatingId] = useState<string | null>(null);
@@ -34,12 +46,32 @@ const EstimatesPage: React.FC = () => {
         return unsub;
     }, []);
 
+    useEffect(() => {
+        const unsub = onSnapshot(collection(db, 'patients'), (snap) => {
+            const map: Record<string, DentrixPatientDoc> = {};
+            snap.docs.forEach((d) => {
+                const row = { id: d.id, ...d.data() } as DentrixPatientDoc;
+                map[String(row.patient_id ?? row.id)] = row;
+            });
+            setPatientsById(map);
+        });
+        return unsub;
+    }, []);
+
     const estimateRows = useMemo<EstimateRow[]>(() => {
         return appointments
             .filter((a) => Number(a.amount ?? 0) > 0 || Number(a.production_type ?? 0) > 0)
+            .filter((a) => !isEstimateSent(a))
+            .filter((a) => {
+                const pid = String(a.patient_id ?? '');
+                const p = patientsById[pid];
+                if (!p) return true;
+                return isActiveDentrixPatient(p);
+            })
             .slice(0, 600)
             .map((a) => ({
                 id: `dentrix-${a.id}`,
+                appointmentDocId: a.id,
                 patientId: String(a.patient_id ?? ''),
                 patientName: cleanDentrixText(a.patient_name) || `Patient #${a.patient_id ?? a.id}`,
                 reason: cleanDentrixText(a.reason) || 'Treatment plan',
@@ -49,12 +81,14 @@ const EstimatesPage: React.FC = () => {
                 amount: Number(a.amount ?? 0),
                 statusId: Number(a.status_id ?? 0),
             }));
-    }, [appointments]);
+    }, [appointments, patientsById]);
 
     const handleLogAction = async (row: EstimateRow, type: string) => {
         setUpdatingId(row.id);
+        await updateDoc(doc(db, 'appointments', row.appointmentDocId), { estimate_sent: true });
         await setDoc(doc(db, 'followUps', row.id), {
             source: 'dentrix',
+            queue: FOLLOW_UP_QUEUE_OUTREACH,
             patient_id: Number(row.patientId),
             patient_name: row.patientName,
             lastChanged: new Date().toISOString(),
@@ -85,8 +119,10 @@ const EstimatesPage: React.FC = () => {
         <div className="p-8 space-y-12 max-w-full mx-auto bg-slate-50/50 font-sans pb-20">
             <div className="flex flex-col md:flex-row items-center justify-between gap-6 border-b pb-8 border-slate-100 px-2">
                 <div>
-                    <h1 className="text-3xl font-black text-slate-900 tracking-tighter uppercase leading-none">Estimates</h1>
-                    <p className="text-[10px] font-black text-slate-300 uppercase tracking-[0.2em] mt-2">Clinical Financial Node</p>
+                    <h1 className="text-3xl font-black text-slate-900 tracking-tighter uppercase leading-none">Estimates to send</h1>
+                    <p className="text-[10px] font-black text-slate-300 uppercase tracking-[0.2em] mt-2">
+                        Treatment rows with production where estimate sent is false — Send marks estimate_sent on the appointment
+                    </p>
                 </div>
                 <div className="relative w-full md:max-w-xs transition-all">
                     <Input
@@ -105,7 +141,12 @@ const EstimatesPage: React.FC = () => {
                     <table className="w-full text-left border-collapse min-w-[800px]">
                         <thead>
                             <tr className="bg-slate-50 border-b border-slate-100/50">
-                                <th className="p-8 text-[10px] font-black text-slate-300 uppercase tracking-[0.3em] pl-12">Patient Name</th>
+                                <th className="p-8 text-[10px] font-black text-slate-300 uppercase tracking-[0.3em] pl-12">
+                                    Patient Name
+                                    <span className="block font-normal normal-case text-[9px] text-slate-400 tracking-normal mt-1">
+                                        Tap for contact card
+                                    </span>
+                                </th>
                                 <th className="p-8 text-[10px] font-black text-slate-300 uppercase tracking-[0.3em]">Treatment</th>
                                 <th className="p-8 text-[10px] font-black text-slate-300 uppercase tracking-[0.3em]">Schedule / Amount</th>
                                 <th className="p-8 text-[10px] font-black text-slate-300 uppercase tracking-[0.3em] text-right pr-12">Portal Signal</th>
@@ -115,8 +156,14 @@ const EstimatesPage: React.FC = () => {
                             {filtered.map(e => (
                                 <tr key={e.id} className="hover:bg-slate-50/50 transition-colors group">
                                     <td className="p-8 pl-12">
-                                        <p className="text-xs font-black text-slate-900 uppercase tracking-tighter leading-none">{e.patientName}</p>
-                                        <p className="text-[9px] font-black text-slate-300 uppercase tracking-widest mt-2 opacity-60">ID: {e.patientId || 'N/A'}</p>
+                                        <PatientProfileTrigger patientId={e.patientId} disabled={!e.patientId}>
+                                            <p className="text-xs font-black text-slate-900 uppercase tracking-tighter leading-none">
+                                                {e.patientName}
+                                            </p>
+                                            <p className="text-[9px] font-black text-slate-300 uppercase tracking-widest mt-2 opacity-60 pointer-events-none">
+                                                ID: {e.patientId || 'N/A'}
+                                            </p>
+                                        </PatientProfileTrigger>
                                     </td>
                                     <td className="p-8">
                                         <p className="text-xs font-black text-slate-800 uppercase tracking-tighter leading-none transition-colors group-hover:text-teal-600">{e.reason}</p>

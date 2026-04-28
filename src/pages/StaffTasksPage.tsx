@@ -1,13 +1,37 @@
-import React, { useState, useEffect } from 'react';
-import { collection, query, where, onSnapshot, doc, updateDoc, serverTimestamp, setDoc, getDoc, orderBy, limit } from 'firebase/firestore';
+import React, { useState, useEffect, useMemo } from 'react';
+import {
+    collection,
+    query,
+    where,
+    onSnapshot,
+    doc,
+    updateDoc,
+    serverTimestamp,
+    setDoc,
+    getDoc,
+    orderBy,
+} from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useAuth } from '../contexts/AuthContext';
-import { format, startOfMonth, addDays, startOfWeek, addWeeks } from 'date-fns';
+import {
+    format,
+    startOfMonth,
+    endOfMonth,
+    addDays,
+    startOfWeek,
+    addMonths,
+    isSameDay,
+    isSameMonth,
+} from 'date-fns';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { cn } from '../lib/utils';
-import { MessageSquare, CheckCircle2, Clock, ListTodo } from 'lucide-react';
+import { MessageSquare, ChevronLeft, ChevronRight, ClipboardList, ListChecks } from 'lucide-react';
 import { navigateToSection } from '../lib/navigation';
+import { isRecallFollowUpDoc, isOpenOutreachItem } from '../lib/followUpQueues';
+import { isOpenWixInquiryDoc } from '../lib/wixInquiryCounts';
+import { deriveTaskGroupFromTitle, TASK_GROUP_ORDER, type TaskGroupId } from '../lib/taskGroups';
+import type { RecurringTask } from '../data/tasksSchedule';
 
 interface Task {
     id: string;
@@ -18,72 +42,155 @@ interface Task {
     priority: 'low' | 'medium' | 'high';
     date?: string;
     assignedTo?: string;
+    taskId?: string;
+    taskGroup?: TaskGroupId;
     notes?: string;
     lastCommentBy?: string;
-    lastCommentAt?: any;
-    completedAt?: any;
+    lastCommentAt?: unknown;
+    completedAt?: { toDate: () => Date };
     completedByName?: string;
+}
+
+function dentrixWeekOfMonth(d: Date): number {
+    return Math.min(4, Math.ceil(d.getDate() / 7));
+}
+
+function dentrixDayOfWeek(d: Date): number {
+    const dow = d.getDay();
+    if (dow === 0) return 1;
+    return dow;
+}
+
+function templatesForDate(schedule: RecurringTask[], d: Date): RecurringTask[] {
+    const w = dentrixWeekOfMonth(d);
+    const day = dentrixDayOfWeek(d);
+    return schedule.filter((t) => t.week === w && t.day === day).sort((a, b) => a.title.localeCompare(b.title));
 }
 
 const StaffTasksPage: React.FC = () => {
     const { user, userProfile } = useAuth();
+    const [viewMonth, setViewMonth] = useState(() => startOfMonth(new Date()));
     const [selectedDate, setSelectedDate] = useState(new Date());
     const [directives, setDirectives] = useState<Task[]>([]);
     const [protocols, setProtocols] = useState<Task[]>([]);
-    const [openFollowUps, setOpenFollowUps] = useState(0);
+    const [monthTasksByDate, setMonthTasksByDate] = useState<Map<string, Task[]>>(new Map());
+    const [recurringSchedule, setRecurringSchedule] = useState<RecurringTask[]>([]);
+    const [openRecallQueue, setOpenRecallQueue] = useState(0);
+    const [openOutreachQueue, setOpenOutreachQueue] = useState(0);
     const [openInquiries, setOpenInquiries] = useState(0);
-    const [teamActivity, setTeamActivity] = useState<Array<{ name: string; count: number }>>([]);
     const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
     const [commentDraft, setCommentDraft] = useState('');
 
     useEffect(() => {
-        const todayStr = format(selectedDate, 'yyyy-MM-dd');
+        if (!activeCommentId) return;
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') setActiveCommentId(null);
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [activeCommentId]);
 
+    const selectedDateStr = format(selectedDate, 'yyyy-MM-dd');
+    const monthStartStr = format(startOfMonth(viewMonth), 'yyyy-MM-dd');
+    const monthEndStr = format(endOfMonth(viewMonth), 'yyyy-MM-dd');
+
+    useEffect(() => {
+        const unsub = onSnapshot(collection(db, 'recurringTaskSchedule'), (snap) => {
+            setRecurringSchedule(snap.docs.map((d) => ({ id: d.id, ...d.data() } as RecurringTask)));
+        });
+        return unsub;
+    }, []);
+
+    useEffect(() => {
+        const q = query(
+            collection(db, 'tasks'),
+            where('type', '==', 'protocol'),
+            where('date', '>=', monthStartStr),
+            where('date', '<=', monthEndStr),
+            orderBy('date', 'asc')
+        );
+        const unsub = onSnapshot(
+            q,
+            (snap) => {
+                const map = new Map<string, Task[]>();
+                snap.docs.forEach((d) => {
+                    const t = { id: d.id, ...d.data() } as Task;
+                    const date = t.date || '';
+                    if (!map.has(date)) map.set(date, []);
+                    map.get(date)!.push(t);
+                });
+                setMonthTasksByDate(map);
+            },
+            () => {
+                setMonthTasksByDate(new Map());
+            }
+        );
+        return unsub;
+    }, [monthStartStr, monthEndStr]);
+
+    useEffect(() => {
         const qD = query(collection(db, 'tasks'), where('type', '==', 'directive'), where('assignedTo', '==', user?.email));
         const unsubD = onSnapshot(qD, (snap) => {
-            setDirectives(snap.docs.map(d => ({ id: d.id, ...d.data() } as Task)));
+            setDirectives(snap.docs.map((d) => ({ id: d.id, ...d.data() } as Task)));
         });
 
-        const qP = query(collection(db, 'tasks'), where('type', '==', 'protocol'), where('date', '==', todayStr));
+        const qP = query(collection(db, 'tasks'), where('type', '==', 'protocol'), where('date', '==', selectedDateStr));
         const unsubP = onSnapshot(qP, (snap) => {
-            setProtocols(snap.docs.map(d => ({ id: d.id, ...d.data() } as Task)));
+            setProtocols(snap.docs.map((d) => ({ id: d.id, ...d.data() } as Task)));
         });
 
         const dayOfMonth = selectedDate.getDate();
         const activeWeek = Math.min(4, Math.ceil(dayOfMonth / 7));
-        const dayOfWeek = selectedDate.getDay();
-        const activeDay = dayOfWeek === 0 ? 1 : (dayOfWeek > 5 ? 5 : dayOfWeek);
+        const activeDay = dentrixDayOfWeek(selectedDate);
 
         const qSched = query(collection(db, 'recurringTaskSchedule'), where('week', '==', activeWeek), where('day', '==', activeDay));
         const unsubSched = onSnapshot(qSched, async (snap) => {
             for (const d of snap.docs) {
                 const data = d.data();
-                const taskId = `${todayStr}-${d.id}`;
+                const taskId = `${selectedDateStr}-${d.id}`;
                 const taskRef = doc(db, 'tasks', taskId);
                 const taskSnap = await getDoc(taskRef);
                 if (!taskSnap.exists()) {
+                    const title = String(data.title ?? '');
+                    const rawGroup = String(data.taskGroup ?? '').trim();
+                    const taskGroup = (TASK_GROUP_ORDER as readonly string[]).includes(rawGroup)
+                        ? (rawGroup as TaskGroupId)
+                        : deriveTaskGroupFromTitle(title);
                     await setDoc(taskRef, {
-                        title: data.title,
+                        title,
                         type: 'protocol',
                         status: 'pending',
                         priority: 'medium',
-                        date: todayStr,
+                        date: selectedDateStr,
                         taskId: d.id,
-                        createdAt: serverTimestamp()
+                        taskGroup,
+                        createdAt: serverTimestamp(),
                     });
                 }
             }
         });
 
-        return () => { unsubD(); unsubP(); unsubSched(); };
-    }, [selectedDate, user?.email]);
+        return () => {
+            unsubD();
+            unsubP();
+            unsubSched();
+        };
+    }, [selectedDate, selectedDateStr, user?.email]);
 
     useEffect(() => {
         const unsubFollowups = onSnapshot(query(collection(db, 'followUps'), where('nextAppointmentBooked', '==', false)), (snap) => {
-            setOpenFollowUps(snap.size);
+            let recall = 0;
+            let outreach = 0;
+            snap.docs.forEach((d) => {
+                const data = d.data() as Record<string, unknown>;
+                if (isRecallFollowUpDoc(data)) recall += 1;
+                else if (isOpenOutreachItem(data)) outreach += 1;
+            });
+            setOpenRecallQueue(recall);
+            setOpenOutreachQueue(outreach);
         });
         const unsubInquiries = onSnapshot(collection(db, 'wixInquiries'), (snap) => {
-            const open = snap.docs.filter((d) => String(d.data().status ?? '').toLowerCase() !== 'converted').length;
+            const open = snap.docs.filter((d) => isOpenWixInquiryDoc(d.data() as Record<string, unknown>)).length;
             setOpenInquiries(open);
         });
         return () => {
@@ -92,43 +199,13 @@ const StaffTasksPage: React.FC = () => {
         };
     }, []);
 
-    useEffect(() => {
-        const unsubLogs = onSnapshot(query(collection(db, 'activityLogs'), orderBy('timestamp', 'desc'), limit(200)), (snap) => {
-            const today = format(new Date(), 'yyyy-MM-dd');
-            const map = new Map<string, number>();
-            snap.docs.forEach((d) => {
-                const row = d.data();
-                if (!row.timestamp?.toDate) return;
-                if (format(row.timestamp.toDate(), 'yyyy-MM-dd') !== today) return;
-                const name = String(row.userName ?? 'Unknown').trim() || 'Unknown';
-                map.set(name, (map.get(name) ?? 0) + 1);
-            });
-            const arr = Array.from(map.entries())
-                .map(([name, count]) => ({ name, count }))
-                .sort((a, b) => b.count - a.count)
-                .slice(0, 4);
-            setTeamActivity(arr);
-        });
-
-        return () => unsubLogs();
-    }, []);
-
     const handleToggleTask = async (task: Task) => {
         const nextStatus = task.status === 'completed' ? 'pending' : 'completed';
         await updateDoc(doc(db, 'tasks', task.id), {
             status: nextStatus,
             completedAt: nextStatus === 'completed' ? serverTimestamp() : null,
             completedBy: nextStatus === 'completed' ? user?.email : null,
-            completedByName: nextStatus === 'completed' ? userProfile?.displayName : null
-        });
-    };
-
-    const handleSetTaskStatus = async (task: Task, status: Task['status']) => {
-        await updateDoc(doc(db, 'tasks', task.id), {
-            status,
-            completedAt: status === 'completed' ? serverTimestamp() : null,
-            completedBy: status === 'completed' ? user?.email : null,
-            completedByName: status === 'completed' ? userProfile?.displayName : null
+            completedByName: nextStatus === 'completed' ? userProfile?.displayName : null,
         });
     };
 
@@ -137,281 +214,306 @@ const StaffTasksPage: React.FC = () => {
         await updateDoc(doc(db, 'tasks', id), {
             notes: commentDraft,
             lastCommentBy: userProfile?.displayName || user?.email,
-            lastCommentAt: serverTimestamp()
+            lastCommentAt: serverTimestamp(),
         });
         setActiveCommentId(null);
         setCommentDraft('');
     };
 
-    const changeDate = (days: number) => {
-        const newDate = addDays(selectedDate, days);
-        if (newDate.getDay() === 0) setSelectedDate(addDays(newDate, 1));
-        else if (newDate.getDay() === 6) setSelectedDate(addDays(newDate, 2));
-        else setSelectedDate(newDate);
+    const weekMonday = startOfWeek(selectedDate, { weekStartsOn: 1 });
+    const weekDays = [0, 1, 2, 3, 4, 5].map((i) => addDays(weekMonday, i));
+
+    const protocolsSorted = useMemo(() => {
+        const priorityRank: Record<Task['priority'], number> = { high: 0, medium: 1, low: 2 };
+        const groupIdx = (t: Task) => {
+            const g = (t.taskGroup as TaskGroupId) || deriveTaskGroupFromTitle(t.title);
+            const i = TASK_GROUP_ORDER.indexOf(g);
+            return i === -1 ? 999 : i;
+        };
+        return [...protocols].sort((a, b) => {
+            const g = groupIdx(a) - groupIdx(b);
+            if (g !== 0) return g;
+            const pr = priorityRank[a.priority] - priorityRank[b.priority];
+            if (pr !== 0) return pr;
+            return a.title.localeCompare(b.title);
+        });
+    }, [protocols]);
+
+    const protocolSplit = useMemo(() => {
+        const mid = Math.ceil(protocolsSorted.length / 2);
+        return { left: protocolsSorted.slice(0, mid), right: protocolsSorted.slice(mid) };
+    }, [protocolsSorted]);
+
+    const findTaskForTemplate = (dateStr: string, templateId: string): Task | undefined => {
+        return monthTasksByDate.get(dateStr)?.find((t) => t.taskId === templateId);
     };
 
-    const setWeek = (weekNum: number) => {
-        const monthStart = startOfMonth(new Date());
-        const targetDate = addWeeks(monthStart, weekNum - 1);
-        const monday = startOfWeek(targetDate, { weekStartsOn: 1 });
-        setSelectedDate(monday);
-    };
-
-    const TaskRow = ({ task }: { task: Task }) => (
-        <div className={cn(
-            "group flex items-center gap-4 px-4 py-2 bg-white border-b border-slate-200 last:border-0 hover:bg-slate-50 transition-colors",
-            task.status === 'completed' && "bg-slate-50/30"
-        )}>
-            <button
-                onClick={() => handleToggleTask(task)}
+    const TaskRow = ({ task }: { task: Task }) => {
+        const done = task.status === 'completed';
+        const completedAt =
+            task.completedAt && typeof task.completedAt.toDate === 'function'
+                ? format(task.completedAt.toDate(), 'h:mm a')
+                : null;
+        return (
+            <div
                 className={cn(
-                    "w-4 h-4 rounded border border-slate-300 shrink-0 flex items-center justify-center transition-all",
-                    task.status === 'completed' ? "bg-teal-600 border-teal-600" : "hover:border-teal-500 bg-white"
+                    'group flex items-start gap-3 px-3 py-2.5 border-b border-slate-100 last:border-0 transition-colors',
+                    done && 'bg-slate-50 opacity-70'
                 )}
             >
-                {task.status === 'completed' && <div className="w-1.5 h-1.5 bg-white rounded-sm" />}
-            </button>
-
-            <div className="flex-1 min-w-0 flex items-center gap-3">
-                <p className={cn("text-[13px] font-medium text-slate-700 truncate", task.status === 'completed' && "line-through text-slate-400")}>
-                    {task.title}
-                </p>
-                {task.priority === 'high' && (
-                    <span className="text-[8px] font-bold px-1 py-0.5 rounded-sm bg-rose-50 text-rose-600 uppercase tracking-tighter">High</span>
-                )}
-            </div>
-
-            <div className="flex items-center gap-4 shrink-0">
-                {task.notes && (
-                    <div className="flex items-center gap-1 text-[10px] text-teal-600 font-bold max-w-[150px] truncate opacity-60">
-                        <MessageSquare size={10} />
-                        {task.notes}
-                    </div>
-                )}
                 <button
-                    onClick={() => { setActiveCommentId(task.id); setCommentDraft(task.notes || ''); }}
-                    className="p-1 hover:bg-slate-100 rounded text-slate-300 hover:text-teal-600 transition-colors"
+                    type="button"
+                    onClick={() => handleToggleTask(task)}
+                    className={cn(
+                        'mt-0.5 w-4 h-4 rounded border shrink-0 flex items-center justify-center',
+                        done ? 'bg-teal-600 border-teal-600' : 'border-slate-300 hover:border-teal-500 bg-white'
+                    )}
+                >
+                    {done && <div className="w-1.5 h-1.5 bg-white rounded-sm" />}
+                </button>
+                <div className="flex-1 min-w-0">
+                    <p className={cn('text-[12px] font-medium text-slate-800 leading-snug', done && 'line-through text-slate-500')}>
+                        {task.title}
+                    </p>
+                    {done && (
+                        <p className="text-[10px] text-slate-500 mt-1">
+                            Done {completedAt ?? ''}
+                            {task.completedByName ? ` · ${task.completedByName}` : ''}
+                        </p>
+                    )}
+                </div>
+                <button
+                    type="button"
+                    onClick={() => {
+                        setActiveCommentId(task.id);
+                        setCommentDraft(task.notes || '');
+                    }}
+                    className="p-1 text-slate-300 hover:text-teal-600"
                 >
                     <MessageSquare size={14} />
                 </button>
-                <div className="w-24 text-right">
-                    {task.status === 'completed' ? (
-                        <span className="text-[9px] font-bold text-teal-600 uppercase tracking-tight flex items-center justify-end gap-1">
-                            <CheckCircle2 size={10} />
-                            {task.completedByName?.split(' ')[0] || 'Done'}
-                        </span>
+            </div>
+        );
+    };
+
+    const WeekDayColumn = ({ day }: { day: Date }) => {
+        const ds = format(day, 'yyyy-MM-dd');
+        const isSel = isSameDay(day, selectedDate);
+        const isToday = isSameDay(day, new Date());
+        const tpls = templatesForDate(recurringSchedule, day);
+        return (
+            <div
+                className={cn(
+                    'min-w-[120px] flex-1 border rounded-lg overflow-hidden flex flex-col bg-white',
+                    isSel ? 'border-teal-500 ring-1 ring-teal-500/30' : 'border-slate-200',
+                    isToday && !isSel && 'border-amber-300'
+                )}
+            >
+                <button
+                    type="button"
+                    onClick={() => setSelectedDate(day)}
+                    aria-pressed={isSel}
+                    aria-label={`${format(day, 'EEEE, MMMM d')}${isToday ? ', today' : ''}`}
+                    className={cn(
+                        'px-2 py-2 text-center border-b w-full',
+                        isSel ? 'bg-teal-600 text-white' : isToday ? 'bg-amber-50' : 'bg-slate-50'
+                    )}
+                >
+                    <p className="text-[9px] font-black uppercase tracking-widest">{format(day, 'EEE')}</p>
+                    <p className="text-xs font-bold">{format(day, 'MMM d')}</p>
+                </button>
+                <div className="flex-1 max-h-[280px] overflow-y-auto text-left">
+                    {tpls.length === 0 ? (
+                        <p className="p-2 text-[9px] text-slate-400 text-center">—</p>
                     ) : (
-                        <span className="text-[9px] font-bold text-slate-300 uppercase tracking-tight">Pending</span>
+                        tpls.map((tpl) => {
+                            const t = findTaskForTemplate(ds, tpl.id);
+                            const done = t?.status === 'completed';
+                            const completedAt =
+                                t?.completedAt && typeof t.completedAt.toDate === 'function'
+                                    ? format(t.completedAt.toDate(), 'h:mm a')
+                                    : null;
+                            return (
+                                <div
+                                    key={tpl.id}
+                                    className={cn(
+                                        'px-2 py-1.5 border-b border-slate-50 text-[10px] leading-tight',
+                                        done && 'bg-slate-50 text-slate-500 line-through'
+                                    )}
+                                >
+                                    {tpl.title}
+                                    {done && (
+                                        <span className="block text-[9px] text-slate-400 not-italic no-underline mt-0.5 normal-case">
+                                            {completedAt}
+                                            {t?.completedByName ? ` · ${t.completedByName.split(' ')[0]}` : ''}
+                                        </span>
+                                    )}
+                                </div>
+                            );
+                        })
                     )}
                 </div>
             </div>
-        </div>
-    );
-
-    const currentWeek = Math.min(4, Math.ceil(selectedDate.getDate() / 7));
-    const priorityRank: Record<Task['priority'], number> = { high: 0, medium: 1, low: 2 };
-    const pendingQueue = [...directives, ...protocols]
-        .filter((t) => t.status !== 'completed')
-        .sort((a, b) => {
-            const priorityDiff = priorityRank[a.priority] - priorityRank[b.priority];
-            if (priorityDiff !== 0) return priorityDiff;
-            if (a.type !== b.type) return a.type === 'directive' ? -1 : 1;
-            return a.title.localeCompare(b.title);
-        });
-    const nextTask = pendingQueue[0];
-    const splitRecommendation =
-        openFollowUps >= openInquiries
-            ? 'Split: Staff A focuses on follow-up calls, Staff B handles inquiries and same-day checklist.'
-            : 'Split: Staff A handles inquiries first, Staff B runs recall calls and booking follow-ups.';
+        );
+    };
 
     return (
-        <div className="p-4 space-y-4 max-w-full mx-auto bg-[#f1f5f9] min-h-screen font-sans">
-            {/* Clinical Header */}
-            <div className="bg-white border border-slate-200 rounded-sm p-4 flex flex-col md:flex-row items-center justify-between gap-4">
-                <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-sm bg-teal-600 flex items-center justify-center">
-                        <ListTodo className="text-white" size={16} />
+        <div className="p-4 space-y-5 max-w-full mx-auto bg-slate-100 min-h-screen font-sans pb-16">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-white border border-slate-200 rounded-lg p-4">
+                <div>
+                    <h1 className="text-lg font-black text-slate-900 uppercase tracking-tight">Staff checklist</h1>
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Week view · month navigation</p>
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                    <Button variant="outline" size="sm" className="h-8 text-[10px] font-bold uppercase" onClick={() => setViewMonth((m) => addMonths(m, -1))}>
+                        <ChevronLeft className="w-4 h-4" />
+                    </Button>
+                    <span className="text-xs font-black text-slate-800 min-w-[120px] text-center uppercase">{format(viewMonth, 'MMMM yyyy')}</span>
+                    <Button variant="outline" size="sm" className="h-8 text-[10px] font-bold uppercase" onClick={() => setViewMonth((m) => addMonths(m, 1))}>
+                        <ChevronRight className="w-4 h-4" />
+                    </Button>
+                    <Button size="sm" className="h-8 text-[10px] font-bold uppercase bg-teal-600" onClick={() => { const t = new Date(); setViewMonth(startOfMonth(t)); setSelectedDate(t); }}>
+                        Jump to today
+                    </Button>
+                </div>
+            </div>
+
+            {!isSameMonth(selectedDate, viewMonth) && (
+                <p className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+                    Selected day is outside the visible month — use arrows to switch month or pick a day below.
+                </p>
+            )}
+
+            <div className="rounded-lg border border-teal-100 bg-gradient-to-br from-teal-50/80 to-white p-4 flex flex-col sm:flex-row gap-4 sm:items-center">
+                <div className="flex items-start gap-3 shrink-0">
+                    <div className="rounded-lg bg-teal-600 p-2 text-white shadow-sm">
+                        <ListChecks className="w-5 h-5" />
                     </div>
                     <div>
-                        <h1 className="text-lg font-bold text-slate-900 tracking-tight leading-none uppercase">Staff Checklist</h1>
-                        <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mt-1">Oasis Dental Administration</p>
+                        <p className="text-xs font-black text-teal-900 uppercase tracking-tight">Daily rhythm</p>
+                        <ol className="mt-2 space-y-1.5 text-[11px] text-slate-700 list-decimal list-inside leading-snug max-w-xl">
+                            <li>Pick today on the week strip (amber outline = today).</li>
+                            <li>Check off every protocol for that day; add a note on the speech icon if something is blocked.</li>
+                            <li>Work directives at the top first — they are assigned only to you.</li>
+                            <li>Use the counters below to jump to recalls, follow-up outreach, or inquiries.</li>
+                        </ol>
                     </div>
                 </div>
-
-                <div className="flex items-center gap-3">
-                    <div className="flex items-center bg-slate-50 p-1 rounded border border-slate-200">
-                        {[1, 2, 3, 4].map(w => (
-                            <button
-                                key={w}
-                                onClick={() => setWeek(w)}
-                                className={cn(
-                                    "px-4 py-1.5 rounded-sm text-[10px] font-bold uppercase tracking-tight transition-all",
-                                    currentWeek === w ? "bg-white text-teal-600 shadow-sm border border-slate-200" : "text-slate-500 hover:text-slate-800"
-                                )}
-                            >
-                                Week {w}
-                            </button>
-                        ))}
-                    </div>
-                    <div className="bg-slate-900 px-3 py-1.5 rounded-sm text-[10px] font-bold text-white uppercase tracking-tight">
-                        {directives.length + protocols.length} Active
-                    </div>
+                <div className="flex flex-wrap gap-2 sm:justify-end sm:ml-auto">
+                    <Button variant="outline" size="sm" className="h-8 text-[9px] font-bold uppercase" onClick={() => navigateToSection('frontDeskQueues')}>
+                        Queues
+                    </Button>
+                    <Button variant="outline" size="sm" className="h-8 text-[9px] font-bold uppercase" onClick={() => navigateToSection('followUpOutreach')}>
+                        Follow up
+                    </Button>
+                    <Button variant="outline" size="sm" className="h-8 text-[9px] font-bold uppercase" onClick={() => navigateToSection('estimates')}>
+                        Estimates
+                    </Button>
                 </div>
             </div>
 
-            {/* Sub Nav */}
-            <div className="flex items-center justify-between bg-white border border-slate-200 rounded-sm px-4 py-2">
-                <div className="flex items-center gap-2">
-                    <Button variant="outline" size="sm" onClick={() => changeDate(-1)} className="h-7 px-3 text-[9px] font-bold uppercase rounded-sm border-slate-200">Previous</Button>
-                    <Button variant="outline" size="sm" onClick={() => setSelectedDate(new Date())} className="h-7 px-3 text-[9px] font-bold uppercase rounded-sm border-slate-200">Today</Button>
-                    <Button variant="outline" size="sm" onClick={() => changeDate(1)} className="h-7 px-3 text-[9px] font-bold uppercase rounded-sm border-slate-200">Next Day</Button>
-                </div>
-                <div className="flex items-center gap-4 text-[10px] font-bold text-slate-500 uppercase">
-                    <div className="flex items-center gap-2">
-                        <Clock size={12} className="text-teal-600" />
-                        {format(selectedDate, 'EEEE, MMMM d, yyyy')}
-                    </div>
-                    <span className="text-slate-300">|</span>
-                    <span className="text-teal-600">Cycle Week {currentWeek}</span>
-                </div>
+            <div className="bg-white border border-slate-200 rounded-lg p-3 overflow-x-auto">
+                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2 px-1 flex items-center gap-2">
+                    <ClipboardList className="w-3.5 h-3.5" aria-hidden />
+                    This week (Mon–Sat) — tap a day to load its protocols
+                </p>
+                <div className="flex gap-2 min-w-[720px]">{weekDays.map((d) => <WeekDayColumn key={d.toISOString()} day={d} />)}</div>
             </div>
 
-            <div className="bg-white border border-slate-200 rounded-sm p-4">
-                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+            <div className="bg-white border border-slate-200 rounded-lg p-4">
+                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 mb-4 border-b border-slate-100 pb-3">
                     <div>
-                        <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Next Best Action</p>
-                        {nextTask ? (
-                            <div className="mt-2">
-                                <p className="text-sm font-bold text-slate-900">{nextTask.title}</p>
-                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">
-                                    {nextTask.type} • {nextTask.priority} priority
-                                </p>
-                            </div>
-                        ) : openFollowUps > 0 ? (
-                            <div className="mt-2">
-                                <p className="text-sm font-bold text-slate-900">No checklist blockers. Start recall calls.</p>
-                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">
-                                    {openFollowUps} follow-up patients waiting
-                                </p>
-                            </div>
-                        ) : openInquiries > 0 ? (
-                            <div className="mt-2">
-                                <p className="text-sm font-bold text-slate-900">Respond to open website inquiries.</p>
-                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">
-                                    {openInquiries} inquiries pending
-                                </p>
-                            </div>
-                        ) : (
-                            <div className="mt-2">
-                                <p className="text-sm font-bold text-slate-900">All queues are clear right now.</p>
-                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">
-                                    Review tomorrow schedule prep
-                                </p>
-                            </div>
-                        )}
+                        <p className="text-[9px] font-black text-teal-600 uppercase tracking-widest">Selected day</p>
+                        <p className="text-lg font-black text-slate-900">{format(selectedDate, 'EEEE, MMMM d, yyyy')}</p>
                     </div>
-                    <div className="flex gap-2 flex-wrap">
-                        {nextTask ? (
-                            <>
-                                {nextTask.status === 'pending' && (
-                                    <Button size="sm" onClick={() => handleSetTaskStatus(nextTask, 'in_progress')} className="h-8 px-3 text-[9px] font-bold uppercase">
-                                        Start Task
-                                    </Button>
-                                )}
-                                <Button size="sm" variant="outline" onClick={() => handleSetTaskStatus(nextTask, 'completed')} className="h-8 px-3 text-[9px] font-bold uppercase">
-                                    Mark Done
-                                </Button>
-                            </>
-                        ) : (
-                            <>
-                                <Button size="sm" onClick={() => navigateToSection('followups')} className="h-8 px-3 text-[9px] font-bold uppercase">
-                                    Open Follow-Ups
-                                </Button>
-                                <Button size="sm" variant="outline" onClick={() => navigateToSection('inquiries')} className="h-8 px-3 text-[9px] font-bold uppercase">
-                                    Open Inquiries
-                                </Button>
-                            </>
-                        )}
+                    <div className="flex gap-2">
+                        <Button variant="outline" size="sm" className="h-8 text-[10px] font-bold uppercase" onClick={() => setSelectedDate((d) => addDays(d, -1))}>
+                            Prev day
+                        </Button>
+                        <Button variant="outline" size="sm" className="h-8 text-[10px] font-bold uppercase" onClick={() => setSelectedDate((d) => addDays(d, 1))}>
+                            Next day
+                        </Button>
                     </div>
                 </div>
-            </div>
 
-            <div className="bg-white border border-slate-200 rounded-sm p-4 space-y-3">
-                <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">Two-Staff Coordination</p>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                    <div className="p-3 rounded border border-amber-200 bg-amber-50">
-                        <p className="text-[9px] font-bold text-amber-700 uppercase tracking-widest">Follow-Up Queue</p>
-                        <p className="text-xl font-bold text-amber-900 mt-1">{openFollowUps}</p>
-                    </div>
-                    <div className="p-3 rounded border border-indigo-200 bg-indigo-50">
-                        <p className="text-[9px] font-bold text-indigo-700 uppercase tracking-widest">Inquiry Queue</p>
-                        <p className="text-xl font-bold text-indigo-900 mt-1">{openInquiries}</p>
-                    </div>
-                    <div className="p-3 rounded border border-slate-200 bg-slate-50">
-                        <p className="text-[9px] font-bold text-slate-600 uppercase tracking-widest">Suggested Split</p>
-                        <p className="text-[11px] font-bold text-slate-800 mt-1 leading-snug">{splitRecommendation}</p>
-                    </div>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
-                    {teamActivity.length === 0 ? (
-                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">No activity logged yet today.</p>
+                <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2">Directives (assigned to you)</p>
+                <div className="rounded-lg border border-slate-200 divide-y divide-slate-100 mb-6">
+                    {directives.length === 0 ? (
+                        <div className="p-6 text-center space-y-1">
+                            <p className="text-[10px] font-bold text-slate-400 uppercase">No directives right now</p>
+                            <p className="text-[11px] text-slate-500 leading-snug max-w-md mx-auto">
+                                One-off tasks from the team show here. If something urgent is missing, ask an admin to add a directive assigned to you.
+                            </p>
+                        </div>
                     ) : (
-                        teamActivity.map((row) => (
-                            <div key={row.name} className="p-2 rounded border border-slate-200 bg-white">
-                                <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest truncate">{row.name}</p>
-                                <p className="text-sm font-bold text-slate-900 mt-1">{row.count} actions</p>
-                            </div>
-                        ))
+                        directives.map((t) => <TaskRow key={t.id} task={t} />)
                     )}
                 </div>
+
+                <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2">Today&apos;s protocols — two columns</p>
+                {protocolsSorted.length === 0 ? (
+                    <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50/50 p-8 text-center space-y-2">
+                        <p className="text-xs font-bold text-slate-600">No protocol checklist for this calendar day</p>
+                        <p className="text-[11px] text-slate-500 max-w-lg mx-auto leading-relaxed">
+                            The recurring schedule may not define tasks for {format(selectedDate, 'EEEE')}, or templates are still syncing. Use the week strip to confirm what should run; protocols appear once the schedule is loaded for that weekday.
+                        </p>
+                    </div>
+                ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="rounded-lg border border-slate-200 overflow-hidden min-h-[120px]">
+                        {protocolSplit.left.map((t) => <TaskRow key={t.id} task={t} />)}
+                    </div>
+                    <div className="rounded-lg border border-slate-200 overflow-hidden min-h-[120px]">
+                        {protocolSplit.right.map((t) => <TaskRow key={t.id} task={t} />)}
+                    </div>
+                </div>
+                )}
             </div>
 
-            {/* Protocol Table */}
-            <div className="bg-white border border-slate-200 rounded-sm overflow-hidden shadow-sm">
-                <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
-                    <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
-                        <div className="w-1.5 h-1.5 rounded-full bg-teal-500" />
-                        Clinical Directives (Assigned to Me)
-                    </h3>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="bg-white border border-amber-200 rounded-lg p-4">
+                    <p className="text-[9px] font-black text-amber-700 uppercase">No appt booked</p>
+                    <p className="text-2xl font-black text-amber-900 mt-1">{openRecallQueue}</p>
+                    <Button variant="outline" size="sm" className="mt-3 h-8 text-[9px] font-bold uppercase w-full" onClick={() => navigateToSection('followups')}>
+                        Open
+                    </Button>
                 </div>
-                <div className="min-h-[100px]">
-                    {directives.length === 0 ? (
-                        <div className="p-8 text-center text-[10px] font-bold uppercase text-slate-300">No personal directives for today</div>
-                    ) : directives.map(t => <TaskRow key={t.id} task={t} />)}
+                <div className="bg-white border border-orange-200 rounded-lg p-4">
+                    <p className="text-[9px] font-black text-orange-700 uppercase">Follow-up outreach</p>
+                    <p className="text-2xl font-black text-orange-900 mt-1">{openOutreachQueue}</p>
+                    <Button variant="outline" size="sm" className="mt-3 h-8 text-[9px] font-bold uppercase w-full" onClick={() => navigateToSection('followUpOutreach')}>
+                        Open
+                    </Button>
                 </div>
-            </div>
-
-            <div className="bg-white border border-slate-200 rounded-sm overflow-hidden shadow-sm">
-                <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
-                    <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
-                        <div className="w-1.5 h-1.5 rounded-full bg-slate-400" />
-                        Daily Operations Protocols
-                    </h3>
-                </div>
-                <div className="min-h-[200px]">
-                    {protocols.length === 0 ? (
-                        <div className="p-12 text-center text-[10px] font-bold uppercase text-slate-300">No protocol items found for this registry date</div>
-                    ) : protocols.map(t => <TaskRow key={t.id} task={t} />)}
+                <div className="bg-white border border-indigo-200 rounded-lg p-4">
+                    <p className="text-[9px] font-black text-indigo-700 uppercase">Inquiries</p>
+                    <p className="text-2xl font-black text-indigo-900 mt-1">{openInquiries}</p>
+                    <Button variant="outline" size="sm" className="mt-3 h-8 text-[9px] font-bold uppercase w-full" onClick={() => navigateToSection('inquiries')}>
+                        Open
+                    </Button>
                 </div>
             </div>
 
-            {/* Note Modal */}
             {activeCommentId && (
                 <>
-                    <div className="fixed inset-0 bg-slate-900/10 z-[100]" onClick={() => setActiveCommentId(null)} />
-                    <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-xs bg-white rounded-sm shadow-2xl border border-slate-300 p-4 z-[101]">
-                        <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 border-b pb-2">Entry Note</h4>
+                    <div className="fixed inset-0 bg-slate-900/20 z-[100]" onClick={() => setActiveCommentId(null)} />
+                    <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-sm bg-white rounded-lg shadow-xl border border-slate-200 p-4 z-[101]">
+                        <h4 className="text-[10px] font-black text-slate-500 uppercase mb-2">Note</h4>
+                        <p className="text-[9px] text-slate-400 mb-2">Press Esc to cancel</p>
                         <Input
                             autoFocus
                             value={commentDraft}
                             onChange={(e) => setCommentDraft(e.target.value)}
-                            placeholder="Clinical comments..."
-                            className="h-9 text-xs font-medium border-slate-200 bg-slate-50 rounded-sm mb-4 focus:bg-white focus:ring-0"
+                            className="mb-3 h-9 text-xs"
                             onKeyDown={(e) => e.key === 'Enter' && handleSaveComment(activeCommentId)}
                         />
                         <div className="flex gap-2">
-                            <Button size="sm" onClick={() => handleSaveComment(activeCommentId)} className="flex-1 h-8 bg-slate-900 text-white font-bold text-[10px] uppercase rounded-sm">Save Entry</Button>
-                            <Button size="sm" variant="outline" onClick={() => setActiveCommentId(null)} className="flex-1 h-8 border border-slate-200 text-[10px] font-bold uppercase rounded-sm">Exit</Button>
+                            <Button size="sm" className="flex-1 h-8 text-[10px] font-bold uppercase" onClick={() => handleSaveComment(activeCommentId)}>
+                                Save
+                            </Button>
+                            <Button size="sm" variant="outline" className="flex-1 h-8 text-[10px] font-bold uppercase" onClick={() => setActiveCommentId(null)}>
+                                Cancel
+                            </Button>
                         </div>
                     </div>
                 </>
