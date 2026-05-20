@@ -14,9 +14,9 @@ export function isRecallFollowUpDoc(data: Record<string, unknown>): boolean {
   return !isOutreachFollowUpDoc(data);
 }
 
-/** Open items for outreach queue KPIs (post-visit uses postVisitResolved, estimates use nextAppointmentBooked). */
+/** Open items for outreach queue KPIs (estimates use nextAppointmentBooked). */
 export function isOpenOutreachItem(data: Record<string, unknown>): boolean {
   if (!isOutreachFollowUpDoc(data)) return false;
-  if (data.kind === 'post_visit') return data.postVisitResolved !== true;
+  if (data.kind === 'post_visit') return false;
   return data.nextAppointmentBooked !== true;
 }

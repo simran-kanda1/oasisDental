@@ -81,7 +81,7 @@ const AppShell: React.FC = () => {
       case 'followups':
         return <FollowUpsPage />;
       case 'followUpOutreach':
-        return <FollowUpOutreachPage />;
+        return <FollowUpOutreachPage initialTab="follow_up" />;
       case 'frontDeskQueues':
         return <FrontDeskQueuesPage />;
       case 'inquiries':

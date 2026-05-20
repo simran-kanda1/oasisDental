@@ -106,7 +106,18 @@ exports.syncWixInquiries = (0, https_1.onCall)({ secrets: [WIX_API_KEY, WIX_SITE
     if (!request.auth) {
         throw new https_1.HttpsError('unauthenticated', 'Must be signed in.');
     }
-    const contacts = (await fetchWixContacts()).filter(isLikelyWebsiteInquiryContact);
+    let contacts = [];
+    try {
+        contacts = await fetchWixContacts();
+    }
+    catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        if (msg.includes('meta-site') && msg.includes('not found')) {
+            throw new https_1.HttpsError('failed-precondition', 'WIX_SITE_ID is not valid for this Wix API key. Set the real Wix Meta Site ID in Firebase Secret WIX_SITE_ID.');
+        }
+        throw new https_1.HttpsError('internal', msg);
+    }
+    contacts = contacts.filter(isLikelyWebsiteInquiryContact);
     const patientPhones = await buildPatientPhoneSet();
     const batch = db.batch();
     const nowIso = new Date().toISOString();

@@ -32,10 +32,18 @@ import { isRecallFollowUpDoc, isOpenOutreachItem } from '../lib/followUpQueues';
 import { isOpenWixInquiryDoc } from '../lib/wixInquiryCounts';
 import { deriveTaskGroupFromTitle, TASK_GROUP_ORDER, type TaskGroupId } from '../lib/taskGroups';
 import type { RecurringTask } from '../data/tasksSchedule';
+import {
+    DENTIST_CHECKLIST_LABELS,
+    DENTIST_TASK_TYPE,
+    RECEPTION_COLUMN_LABELS,
+    receptionColumnIndex,
+    type DentistChecklistId,
+} from '../lib/staffChecklist';
 
 interface Task {
     id: string;
-    type: 'protocol' | 'directive';
+    type: 'protocol' | 'directive' | 'dentist_checklist';
+    dentist?: DentistChecklistId;
     title: string;
     description?: string;
     status: 'pending' | 'in_progress' | 'completed';
@@ -73,6 +81,7 @@ const StaffTasksPage: React.FC = () => {
     const [selectedDate, setSelectedDate] = useState(new Date());
     const [directives, setDirectives] = useState<Task[]>([]);
     const [protocols, setProtocols] = useState<Task[]>([]);
+    const [dentistTasks, setDentistTasks] = useState<Task[]>([]);
     const [monthTasksByDate, setMonthTasksByDate] = useState<Map<string, Task[]>>(new Map());
     const [recurringSchedule, setRecurringSchedule] = useState<RecurringTask[]>([]);
     const [openRecallQueue, setOpenRecallQueue] = useState(0);
@@ -139,6 +148,19 @@ const StaffTasksPage: React.FC = () => {
             setProtocols(snap.docs.map((d) => ({ id: d.id, ...d.data() } as Task)));
         });
 
+        const qDentist = query(
+            collection(db, 'tasks'),
+            where('type', '==', DENTIST_TASK_TYPE),
+            where('date', '==', selectedDateStr)
+        );
+        const unsubDentist = onSnapshot(
+            qDentist,
+            (snap) => {
+                setDentistTasks(snap.docs.map((d) => ({ id: d.id, ...d.data() } as Task)));
+            },
+            () => setDentistTasks([])
+        );
+
         const dayOfMonth = selectedDate.getDate();
         const activeWeek = Math.min(4, Math.ceil(dayOfMonth / 7));
         const activeDay = dentrixDayOfWeek(selectedDate);
@@ -173,6 +195,7 @@ const StaffTasksPage: React.FC = () => {
         return () => {
             unsubD();
             unsubP();
+            unsubDentist();
             unsubSched();
         };
     }, [selectedDate, selectedDateStr, user?.email]);
@@ -240,9 +263,27 @@ const StaffTasksPage: React.FC = () => {
     }, [protocols]);
 
     const protocolSplit = useMemo(() => {
-        const mid = Math.ceil(protocolsSorted.length / 2);
-        return { left: protocolsSorted.slice(0, mid), right: protocolsSorted.slice(mid) };
+        const left: Task[] = [];
+        const right: Task[] = [];
+        for (const t of protocolsSorted) {
+            const col = receptionColumnIndex(t.taskId ?? t.id);
+            if (col === 0) left.push(t);
+            else right.push(t);
+        }
+        return { left, right };
     }, [protocolsSorted]);
+
+    const dentistTasksById = useMemo(() => {
+        const map: Record<DentistChecklistId, Task[]> = { rick: [], vick: [] };
+        for (const t of dentistTasks) {
+            const key = t.dentist === 'vick' ? 'vick' : 'rick';
+            map[key].push(t);
+        }
+        for (const key of Object.keys(map) as DentistChecklistId[]) {
+            map[key].sort((a, b) => a.title.localeCompare(b.title));
+        }
+        return map;
+    }, [dentistTasks]);
 
     const findTaskForTemplate = (dateStr: string, templateId: string): Task | undefined => {
         return monthTasksByDate.get(dateStr)?.find((t) => t.taskId === templateId);
@@ -404,9 +445,6 @@ const StaffTasksPage: React.FC = () => {
                         Queues
                     </Button>
                     <Button variant="outline" size="sm" className="h-8 text-[9px] font-bold uppercase" onClick={() => navigateToSection('followUpOutreach')}>
-                        Follow up
-                    </Button>
-                    <Button variant="outline" size="sm" className="h-8 text-[9px] font-bold uppercase" onClick={() => navigateToSection('estimates')}>
                         Estimates
                     </Button>
                 </div>
@@ -450,7 +488,9 @@ const StaffTasksPage: React.FC = () => {
                     )}
                 </div>
 
-                <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2">Today&apos;s protocols — two columns</p>
+                <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2">
+                    Reception duties — split evenly between two secretaries
+                </p>
                 {protocolsSorted.length === 0 ? (
                     <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50/50 p-8 text-center space-y-2">
                         <p className="text-xs font-bold text-slate-600">No protocol checklist for this calendar day</p>
@@ -461,13 +501,45 @@ const StaffTasksPage: React.FC = () => {
                 ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="rounded-lg border border-slate-200 overflow-hidden min-h-[120px]">
-                        {protocolSplit.left.map((t) => <TaskRow key={t.id} task={t} />)}
+                        <p className="text-[9px] font-black text-teal-700 uppercase tracking-widest px-3 py-2 bg-teal-50 border-b border-teal-100">
+                            {RECEPTION_COLUMN_LABELS[0]} ({protocolSplit.left.length})
+                        </p>
+                        {protocolSplit.left.length === 0 ? (
+                            <p className="p-4 text-[10px] text-slate-400 text-center">No tasks in this column</p>
+                        ) : (
+                            protocolSplit.left.map((t) => <TaskRow key={t.id} task={t} />)
+                        )}
                     </div>
                     <div className="rounded-lg border border-slate-200 overflow-hidden min-h-[120px]">
-                        {protocolSplit.right.map((t) => <TaskRow key={t.id} task={t} />)}
+                        <p className="text-[9px] font-black text-teal-700 uppercase tracking-widest px-3 py-2 bg-teal-50 border-b border-teal-100">
+                            {RECEPTION_COLUMN_LABELS[1]} ({protocolSplit.right.length})
+                        </p>
+                        {protocolSplit.right.length === 0 ? (
+                            <p className="p-4 text-[10px] text-slate-400 text-center">No tasks in this column</p>
+                        ) : (
+                            protocolSplit.right.map((t) => <TaskRow key={t.id} task={t} />)
+                        )}
                     </div>
                 </div>
                 )}
+
+                <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2 mt-8">Dentist checklists</p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {(['rick', 'vick'] as const).map((dentistId) => (
+                        <div key={dentistId} className="rounded-lg border border-slate-200 overflow-hidden min-h-[100px]">
+                            <p className="text-[9px] font-black text-slate-700 uppercase tracking-widest px-3 py-2 bg-slate-100 border-b border-slate-200">
+                                {DENTIST_CHECKLIST_LABELS[dentistId]} ({dentistTasksById[dentistId].length})
+                            </p>
+                            {dentistTasksById[dentistId].length === 0 ? (
+                                <p className="p-4 text-[10px] text-slate-400 text-center leading-snug">
+                                    No tasks for today. Admins can add items in the admin portal.
+                                </p>
+                            ) : (
+                                dentistTasksById[dentistId].map((t) => <TaskRow key={t.id} task={t} />)
+                            )}
+                        </div>
+                    ))}
+                </div>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -479,7 +551,7 @@ const StaffTasksPage: React.FC = () => {
                     </Button>
                 </div>
                 <div className="bg-white border border-orange-200 rounded-lg p-4">
-                    <p className="text-[9px] font-black text-orange-700 uppercase">Follow-up outreach</p>
+                    <p className="text-[9px] font-black text-orange-700 uppercase">Estimate follow-up</p>
                     <p className="text-2xl font-black text-orange-900 mt-1">{openOutreachQueue}</p>
                     <Button variant="outline" size="sm" className="mt-3 h-8 text-[9px] font-bold uppercase w-full" onClick={() => navigateToSection('followUpOutreach')}>
                         Open

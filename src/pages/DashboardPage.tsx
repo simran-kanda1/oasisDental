@@ -242,7 +242,7 @@ const DashboardPage: React.FC = () => {
         { label: 'Week Appointments', value: counts.appointmentsThisWeek, icon: Calendar, color: 'text-blue-600', border: 'border-blue-200' },
         { label: 'Open Inquiries', value: counts.openInquiries, icon: MessageSquare, color: 'text-indigo-600', border: 'border-indigo-200' },
         { label: 'No appt booked queue', value: counts.pendingRecallQueue, icon: PhoneCall, color: 'text-amber-600', border: 'border-amber-200' },
-        { label: 'Follow-up outreach', value: counts.pendingOutreachQueue, icon: PhoneCall, color: 'text-orange-600', border: 'border-orange-200' },
+        { label: 'Estimate follow-up', value: counts.pendingOutreachQueue, icon: PhoneCall, color: 'text-orange-600', border: 'border-orange-200' },
         { label: 'Overdue Recalls', value: counts.overdueRecalls, icon: AlertTriangle, color: 'text-rose-600', border: 'border-rose-200' },
         { label: 'High-Risk Patients', value: counts.highRiskPatients, icon: AlertTriangle, color: 'text-fuchsia-600', border: 'border-fuchsia-200' },
         { label: 'Checklist', value: counts.tasksRemaining, icon: ListTodo, color: 'text-slate-600', border: 'border-slate-300' },
@@ -451,7 +451,7 @@ const DashboardPage: React.FC = () => {
                         onClick={() => navigateToSection('followUpOutreach')}
                         className="p-3 rounded border border-orange-200 bg-orange-50 hover:bg-white text-left transition-colors"
                     >
-                        <p className="text-[9px] font-bold text-orange-600 uppercase tracking-widest">Follow up</p>
+                        <p className="text-[9px] font-bold text-orange-600 uppercase tracking-widest">Estimate follow-up</p>
                         <p className="text-sm font-bold text-orange-900 mt-1">{counts.pendingOutreachQueue} open</p>
                     </button>
                     <button

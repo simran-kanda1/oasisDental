@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { doc, onSnapshot } from 'firebase/firestore';
+import { collection, doc, getDocs, limit, onSnapshot, query, where } from 'firebase/firestore';
 import { X, Phone, MapPin, Mail, Copy, User } from 'lucide-react';
 import { db } from '../lib/firebase';
 import { resolvePatientFirestoreDocId } from '../lib/resolvePatientFirestoreDoc';
@@ -9,7 +9,6 @@ import {
     formatPatientFullName,
     getPatientBestPhone,
     getPatientNotesBlocks,
-    isActiveDentrixPatient,
     type DentrixPatientDoc,
 } from '../lib/dentrix';
 import { Button } from './ui/button';
@@ -46,6 +45,16 @@ function usePatientDocSubscription(firestoreDocId: string | null) {
     return { patient, loading };
 }
 
+interface ReferralDocShape {
+    ref_id?: number;
+    ref_type?: number;
+    first_name?: string;
+    last_name?: string;
+    title?: string;
+    phone?: string;
+    non_person_flag?: boolean;
+}
+
 async function copyText(label: string, text: string) {
     try {
         await navigator.clipboard.writeText(text);
@@ -63,6 +72,8 @@ export const PatientQuickProfileModal: React.FC<PatientQuickProfileModalProps> =
     const [resolvedDocId, setResolvedDocId] = useState<string | null>(null);
     const [resolveError, setResolveError] = useState(false);
     const [resolvingLookup, setResolvingLookup] = useState(true);
+    const [referral, setReferral] = useState<ReferralDocShape | null>(null);
+    const [referralLoading, setReferralLoading] = useState(false);
 
     useEffect(() => {
         let cancelled = false;
@@ -88,6 +99,35 @@ export const PatientQuickProfileModal: React.FC<PatientQuickProfileModalProps> =
     const { patient, loading } = usePatientDocSubscription(resolvedDocId);
 
     useEffect(() => {
+        if (!patient) {
+            setReferral(null);
+            return;
+        }
+        const refId = Number(patient.referred_by_ref_id ?? patient.referral_id ?? 0);
+        if (!Number.isFinite(refId) || refId <= 0) {
+            setReferral(null);
+            return;
+        }
+        let cancelled = false;
+        setReferralLoading(true);
+        getDocs(query(collection(db, 'referrals'), where('ref_id', '==', refId), limit(1)))
+            .then((snap) => {
+                if (cancelled) return;
+                setReferral(snap.empty ? null : (snap.docs[0].data() as ReferralDocShape));
+                setReferralLoading(false);
+            })
+            .catch(() => {
+                if (!cancelled) {
+                    setReferral(null);
+                    setReferralLoading(false);
+                }
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [patient?.id, patient?.referred_by_ref_id, patient?.referral_id]);
+
+    useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
             if (e.key === 'Escape') onClose();
         };
@@ -104,7 +144,24 @@ export const PatientQuickProfileModal: React.FC<PatientQuickProfileModalProps> =
     const mobile = patient ? cleanDentrixText(patient.mobile_phone) : '';
     const home = patient ? cleanDentrixText(patient.home_phone) : '';
     const email = patient ? cleanDentrixText(patient.email) : '';
-    const active = patient ? isActiveDentrixPatient(patient) : true;
+    const statusHint = patient
+        ? Number(patient.status) === 2
+            ? 'Non-patient record (Dentrix)'
+            : Number(patient.status) === 4
+              ? 'Archived patient (Dentrix)'
+              : Number(patient.status) === 3
+                ? 'Inactive patient (Dentrix)'
+                : null
+        : null;
+
+    const referralDisplayName = referral
+        ? [cleanDentrixText(referral.title), cleanDentrixText(referral.first_name), cleanDentrixText(referral.last_name)]
+              .filter(Boolean)
+              .join(' ')
+              .trim() || 'Referral source'
+        : '';
+    const referralTypeLabel =
+        referral?.ref_type === 0 ? 'Referred by patient' : referral?.ref_type === 1 ? 'Referred by doctor / source' : referral?.ref_type === 2 ? 'Referred to' : 'Referral';
 
     return (
         <>
@@ -128,9 +185,9 @@ export const PatientQuickProfileModal: React.FC<PatientQuickProfileModalProps> =
                                 Dentrix ID {patientLookupId}
                                 {patient?.patient_guid ? ` · ${cleanDentrixText(patient.patient_guid).slice(0, 8)}…` : ''}
                             </p>
-                            {!active && (
+                            {statusHint && (
                                 <span className="mt-1 inline-block rounded border border-amber-200 bg-amber-50 px-2 py-0.5 text-[9px] font-black uppercase text-amber-800">
-                                    Inactive in Dentrix
+                                    {statusHint}
                                 </span>
                             )}
                         </div>
@@ -236,6 +293,28 @@ export const PatientQuickProfileModal: React.FC<PatientQuickProfileModalProps> =
                                     </p>
                                 ) : (
                                     <p className="text-xs text-slate-500 italic">No address on file in sync.</p>
+                                )}
+                            </section>
+
+                            <section>
+                                <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-2">Referral</p>
+                                {referralLoading ? (
+                                    <p className="text-xs text-slate-500 italic">Loading referral…</p>
+                                ) : !referral ? (
+                                    <p className="text-xs text-slate-500 italic">No linked referral in sync.</p>
+                                ) : (
+                                    <div className="rounded-lg border border-teal-100 bg-teal-50/40 p-2 space-y-1">
+                                        <p className="text-[10px] font-black uppercase text-teal-800">{referralTypeLabel}</p>
+                                        <p className="text-xs font-bold text-slate-900">{referralDisplayName}</p>
+                                        {cleanDentrixText(referral.phone) ? (
+                                            <p className="text-xs text-slate-700 tabular-nums">{cleanDentrixText(referral.phone)}</p>
+                                        ) : null}
+                                        {referral.ref_type === 1 && !referral.non_person_flag ? (
+                                            <p className="text-[10px] font-bold text-teal-900 leading-snug mt-1">
+                                                Follow up with this referrer after the visit to update them on how the patient is doing.
+                                            </p>
+                                        ) : null}
+                                    </div>
                                 )}
                             </section>
 

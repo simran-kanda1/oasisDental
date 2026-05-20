@@ -46,3 +46,22 @@ export function patientHasFutureAppointmentAfter(
     return true;
   });
 }
+
+export function isEstimateTypeAppointmentLabel(label: string): boolean {
+  return /\b(estimate|treatment plan|tx plan|financial|pre-?det|predet|presentation)\b/i.test(label);
+}
+
+/** Future appointment whose text matches estimate / treatment plan style visits. */
+export function patientHasFutureEstimateTypeAppointment(
+  patientId: string,
+  appointments: DentrixAppointmentDoc[],
+  today: Date
+): boolean {
+  const t0 = startOfDay(today);
+  return appointments.some((x) => {
+    if (String(x.patient_id ?? '') !== patientId) return false;
+    if (!isEstimateTypeAppointmentLabel(appointmentLabelText(x))) return false;
+    const d = parseDentrixDate(x.appointment_date);
+    return !!d && isAfter(d, t0);
+  });
+}

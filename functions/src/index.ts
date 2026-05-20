@@ -127,7 +127,20 @@ export const syncWixInquiries = onCall(
       throw new HttpsError('unauthenticated', 'Must be signed in.');
     }
 
-    const contacts = (await fetchWixContacts()).filter(isLikelyWebsiteInquiryContact);
+    let contacts: WixContact[] = [];
+    try {
+      contacts = await fetchWixContacts();
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      if (msg.includes('meta-site') && msg.includes('not found')) {
+        throw new HttpsError(
+          'failed-precondition',
+          'WIX_SITE_ID is not valid for this Wix API key. Set the real Wix Meta Site ID in Firebase Secret WIX_SITE_ID.'
+        );
+      }
+      throw new HttpsError('internal', msg);
+    }
+    contacts = contacts.filter(isLikelyWebsiteInquiryContact);
     const patientPhones = await buildPatientPhoneSet();
 
     const batch = db.batch();

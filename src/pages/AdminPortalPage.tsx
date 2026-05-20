@@ -10,6 +10,7 @@ import { isActiveDentrixPatient } from '../lib/dentrix';
 import { isRecallFollowUpDoc, isOpenOutreachItem } from '../lib/followUpQueues';
 import { isOpenWixInquiryDoc } from '../lib/wixInquiryCounts';
 import { deriveTaskGroupFromTitle } from '../lib/taskGroups';
+import { DENTIST_CHECKLIST_LABELS, DENTIST_TASK_TYPE, type DentistChecklistId } from '../lib/staffChecklist';
 import { Card, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -18,7 +19,9 @@ import { cn } from '../lib/utils';
 
 interface Task {
     id: string;
-    type: 'protocol' | 'directive';
+    type: 'protocol' | 'directive' | 'dentist_checklist';
+    dentist?: DentistChecklistId;
+    date?: string;
     title: string;
     description?: string;
     assignedTo: string;
@@ -32,7 +35,6 @@ interface Task {
     completedBy?: string;
     completedByName?: string;
     createdAt?: any;
-    date?: string;
     taskId?: string;
     notes?: string;
 }
@@ -95,6 +97,7 @@ const AdminPortalPage: React.FC = () => {
     const [logs, setLogs] = useState<any[]>([]);
     const [users, setUsers] = useState<any[]>([]);
     const [showAddTask, setShowAddTask] = useState(false);
+    const [showAddDentistTask, setShowAddDentistTask] = useState(false);
     const [showAddRecurring, setShowAddRecurring] = useState(false);
     const [loading, setLoading] = useState(true);
     const [activeWeek, setActiveWeek] = useState(1);
@@ -160,6 +163,21 @@ const AdminPortalPage: React.FC = () => {
             createdAt: serverTimestamp()
         });
         setShowAddTask(false);
+    };
+
+    const handleAddDentistTask = async (t: { title: string; dentist: DentistChecklistId; date: string }) => {
+        await addDoc(collection(db, 'tasks'), {
+            title: t.title,
+            type: DENTIST_TASK_TYPE,
+            dentist: t.dentist,
+            date: t.date,
+            status: 'pending',
+            priority: 'medium',
+            assignedBy: user?.email,
+            assignedByName: userProfile?.displayName || user?.email,
+            createdAt: serverTimestamp(),
+        });
+        setShowAddDentistTask(false);
     };
 
     const handleAddRecurring = async (e: React.FormEvent) => {
@@ -470,6 +488,65 @@ const AdminPortalPage: React.FC = () => {
                             </form>
                         </Card>
                     )}
+
+                    <div className="flex justify-between items-center border-b pb-6 border-slate-50 px-2 mt-12">
+                        <h3 className="text-[11px] font-black text-slate-300 uppercase tracking-[0.3em]">Dentist checklists (today)</h3>
+                        <Button onClick={() => setShowAddDentistTask(true)} className="h-11 px-8 bg-teal-600 text-white font-black text-[10px] uppercase tracking-widest rounded-xl">
+                            Add dentist task
+                        </Button>
+                    </div>
+
+                    {showAddDentistTask && (
+                        <Card className="p-8 border-slate-100 rounded-[2rem] shadow-xl">
+                            <form
+                                onSubmit={(e) => {
+                                    e.preventDefault();
+                                    const formData = new FormData(e.currentTarget);
+                                    handleAddDentistTask({
+                                        title: formData.get('title') as string,
+                                        dentist: formData.get('dentist') as DentistChecklistId,
+                                        date: formData.get('date') as string,
+                                    });
+                                }}
+                                className="space-y-6"
+                            >
+                                <Input name="title" placeholder="Task for Dr. Rick or Dr. Vick…" required className="h-12" />
+                                <div className="grid grid-cols-2 gap-4">
+                                    <select name="dentist" className="h-12 border border-slate-100 rounded-xl px-4 text-[11px] font-black uppercase">
+                                        <option value="rick">{DENTIST_CHECKLIST_LABELS.rick}</option>
+                                        <option value="vick">{DENTIST_CHECKLIST_LABELS.vick}</option>
+                                    </select>
+                                    <Input name="date" type="date" required defaultValue={format(new Date(), 'yyyy-MM-dd')} className="h-12" />
+                                </div>
+                                <div className="flex gap-3">
+                                    <Button type="submit" className="flex-1 bg-teal-600 text-white h-11 font-black text-[10px] uppercase">Save</Button>
+                                    <Button type="button" variant="ghost" onClick={() => setShowAddDentistTask(false)} className="h-11">
+                                        Cancel
+                                    </Button>
+                                </div>
+                            </form>
+                        </Card>
+                    )}
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-12">
+                        {(['rick', 'vick'] as const).map((dentistId) => (
+                            <div key={dentistId} className="space-y-4">
+                                <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.3em]">{DENTIST_CHECKLIST_LABELS[dentistId]}</h4>
+                                <div className="grid gap-4">
+                                    {tasks
+                                        .filter(
+                                            (t) =>
+                                                t.type === DENTIST_TASK_TYPE &&
+                                                (t as { dentist?: string }).dentist === dentistId &&
+                                                (t as { date?: string }).date === format(new Date(), 'yyyy-MM-dd')
+                                        )
+                                        .map((t) => (
+                                            <TaskCard key={t.id} task={t} onStatusChange={handleStatusChange} onDelete={handleDeleteTask} isAdmin={isAdmin} />
+                                        ))}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
                         {(['pending', 'in_progress', 'completed'] as const).map(status => (

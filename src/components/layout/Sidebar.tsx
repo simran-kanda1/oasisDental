@@ -3,7 +3,7 @@ import { cn } from '../../lib/utils';
 import {
     LayoutDashboard, Calendar, MessageSquare, PhoneCall, Mail,
     Menu, X, ChevronRight, LogOut, Bell,
-    ClipboardList, ShieldCheck, ListTodo, UsersRound, LayoutList,
+    ShieldCheck, ListTodo, UsersRound, LayoutList,
 } from 'lucide-react';
 import { Tooth } from '../ui/icons';
 import { useAuth } from '../../contexts/AuthContext';
@@ -24,9 +24,8 @@ const navItems = [
     { id: 'appointments', label: 'Appointments', icon: Calendar },
     { id: 'frontDeskQueues', label: 'Queues', icon: LayoutList },
     { id: 'followups', label: 'No appt booked', icon: PhoneCall },
-    { id: 'followUpOutreach', label: 'Follow up', icon: UsersRound },
+    { id: 'followUpOutreach', label: 'Estimates', icon: UsersRound },
     { id: 'inquiries', label: 'Inquiries', icon: MessageSquare },
-    { id: 'estimates', label: 'Est. to send', icon: ClipboardList },
     { id: 'newsletter', label: 'News', icon: Mail },
 ];
 
@@ -189,7 +188,7 @@ export const TopBar: React.FC<{ section: string }> = ({ section }) => {
                 return [
                     ...rest,
                     { id: 'summary-recall', title: `${recall} no follow-up appt booked`, type: 'summary' },
-                    { id: 'summary-outreach', title: `${outreach} follow-up outreach open`, type: 'summary' },
+                    { id: 'summary-outreach', title: `${outreach} estimate follow-ups open`, type: 'summary' },
                 ];
             });
         });
@@ -217,9 +216,9 @@ export const TopBar: React.FC<{ section: string }> = ({ section }) => {
         appointments: 'Appointments',
         frontDeskQueues: 'Front desk queues',
         followups: 'No follow up appt booked',
-        followUpOutreach: 'Follow up',
+        followUpOutreach: 'Estimate follow-up',
         inquiries: 'Inquiries',
-        estimates: 'Estimates to send',
+        estimates: 'Estimate follow-up',
         newsletter: 'News',
         admin: 'Admin',
     };

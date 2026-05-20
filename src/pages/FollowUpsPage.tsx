@@ -1,4 +1,5 @@
 import React, { useMemo, useState, useEffect } from 'react';
+import { format } from 'date-fns';
 import { collection, doc, onSnapshot, query, setDoc, limit, orderBy } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { Button } from '../components/ui/button';
@@ -12,6 +13,8 @@ import {
 import { FOLLOW_UP_QUEUE_RECALL, isRecallFollowUpDoc } from '../lib/followUpQueues';
 import { LogOutreachModal, type OutreachLogPayload } from '../components/LogOutreachModal';
 import { PatientProfileTrigger } from '../components/PatientProfileTrigger';
+import { NOT_REBOOKED_REASON_OPTIONS } from '../lib/notRebookedReasons';
+import { appendTimestampedFollowUpNote, latestNotePreview } from '../lib/followUpNotes';
 import {
     cleanDentrixText,
     formatDentrixDateKey,
@@ -33,8 +36,11 @@ interface FollowUpTrackingDoc {
     status?: string;
     outcome?: string;
     notes?: string;
+    notRebookedReason?: string;
     lastChanged?: string;
     followUpDate?: string;
+    lastNoteAt?: string;
+    lastNoteBy?: string;
     nextAppointmentBooked?: boolean;
     nextAppointmentDate?: string;
     source?: string;
@@ -233,9 +239,17 @@ const FollowUpsPage: React.FC = () => {
             nextAppointmentBooked: false,
             lastOutreach: entry,
             outreachHistory,
-            notes: payload.notes.trim()
-                ? [item.tracking?.notes, payload.notes].filter(Boolean).join('\n---\n')
-                : item.tracking?.notes,
+            ...(payload.notes.trim()
+                ? appendTimestampedFollowUpNote(
+                      item.tracking?.notes,
+                      payload.notes,
+                      userProfile?.displayName ?? user?.email ?? 'User'
+                  )
+                : {
+                      notes: item.tracking?.notes,
+                      lastNoteAt: item.tracking?.lastNoteAt,
+                      lastNoteBy: item.tracking?.lastNoteBy,
+                  }),
         });
         if (user?.uid && user.email) {
             await logActivity({
@@ -260,9 +274,11 @@ const FollowUpsPage: React.FC = () => {
     };
 
     const saveNote = async (item: DentrixFollowUpWorkItem & { trackingId: string; tracking?: FollowUpTrackingDoc }) => {
+        if (!noteDraft.trim()) return;
         setUpdatingId(item.patientId);
+        const author = userProfile?.displayName ?? user?.email ?? 'User';
         await upsertTracking(item, {
-            notes: noteDraft,
+            ...appendTimestampedFollowUpNote(item.tracking?.notes, noteDraft, author),
             status: item.tracking?.status ?? 'not_contacted',
         });
         setUpdatingId(null);
@@ -351,7 +367,7 @@ const FollowUpsPage: React.FC = () => {
             ) : (
                 <div className="bg-white border border-slate-100 rounded-[2.5rem] shadow-sm overflow-hidden min-h-[500px]">
                     <div className="overflow-x-auto scrollbar-none">
-                        <table className="w-full text-left border-collapse min-w-[1300px]">
+                        <table className="w-full text-left border-collapse min-w-[1480px]">
                             <thead>
                                 <tr className="bg-slate-50 border-b border-slate-100/50">
                                     <th className="p-6 text-[10px] font-black text-slate-300 uppercase tracking-[0.2em] pl-10">
@@ -361,6 +377,9 @@ const FollowUpsPage: React.FC = () => {
                                         </span>
                                     </th>
                                     <th className="p-6 text-[10px] font-black text-slate-300 uppercase tracking-[0.2em]">Risk</th>
+                                    <th className="p-6 text-[10px] font-black text-slate-300 uppercase tracking-[0.2em] min-w-[140px]">
+                                        Why not rebooked
+                                    </th>
                                     <th className="p-6 text-[10px] font-black text-slate-300 uppercase tracking-[0.2em]">Missed</th>
                                     <th className="p-6 text-[10px] font-black text-slate-300 uppercase tracking-[0.2em]">Last Appointment</th>
                                     <th className="p-6 text-[10px] font-black text-slate-300 uppercase tracking-[0.2em]">Outreach</th>
@@ -385,6 +404,24 @@ const FollowUpsPage: React.FC = () => {
                                             <span className={`inline-flex h-8 items-center px-3 rounded-xl border text-[9px] font-black uppercase tracking-widest ${getRiskBadgeClass(item.risk)}`}>
                                                 {item.risk}
                                             </span>
+                                        </td>
+                                        <td className="p-6">
+                                            <select
+                                                className="w-full max-w-[160px] h-9 rounded-xl border border-slate-100 text-[9px] font-black uppercase bg-white disabled:opacity-40"
+                                                disabled={!!updatingId || !!item.tracking?.nextAppointmentBooked}
+                                                value={item.tracking?.notRebookedReason ?? ''}
+                                                onChange={(e) =>
+                                                    upsertTracking(item, {
+                                                        notRebookedReason: e.target.value || undefined,
+                                                    })
+                                                }
+                                            >
+                                                {NOT_REBOOKED_REASON_OPTIONS.map((o) => (
+                                                    <option key={o.value || 'empty'} value={o.value}>
+                                                        {o.label}
+                                                    </option>
+                                                ))}
+                                            </select>
                                         </td>
                                         <td className="p-6">
                                             <div className="text-xs font-black text-rose-600">{item.missedAppointments}</div>
@@ -419,8 +456,13 @@ const FollowUpsPage: React.FC = () => {
                                                     className="text-left w-full"
                                                 >
                                                     <p className="text-[11px] font-bold text-slate-600 uppercase tracking-tight leading-relaxed">
-                                                        {item.tracking?.notes || 'Add internal note'}
+                                                        {item.tracking?.notes ? latestNotePreview(item.tracking.notes, 120) : 'Add internal note'}
                                                     </p>
+                                                    {item.tracking?.lastNoteAt && (
+                                                        <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-1">
+                                                            Last note {format(new Date(item.tracking.lastNoteAt), 'MMM d, h:mm a')}
+                                                        </p>
+                                                    )}
                                                 </button>
                                                 <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-2">
                                                     {item.tracking?.outcome || 'No outcome yet'}

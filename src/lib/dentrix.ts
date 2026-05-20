@@ -59,8 +59,13 @@ export interface DentrixPatientDoc {
   zip_code?: string;
   /** Free-text notes from patient record (varies by sync) */
   patient_notes?: string;
+  /** Dentrix export often uses singular `note` */
+  note?: string;
   notes?: string;
   chart_notes?: string;
+  /** Links to `referrals.ref_id` when sync includes referral source */
+  referred_by_ref_id?: number;
+  referral_id?: number;
   preferred_contact_method?: string;
   birth_date?: string;
 }
@@ -137,11 +142,13 @@ export const getPatientNotesBlocks = (
 ): { label: string; text: string }[] => {
   const blocks: { label: string; text: string }[] = [];
   const pn = cleanDentrixText(patient.patient_notes);
+  const singleNote = cleanDentrixText(patient.note);
   const n = cleanDentrixText(patient.notes);
   const cn = cleanDentrixText(patient.chart_notes);
   if (pn) blocks.push({ label: 'Patient notes', text: pn });
-  if (n && n !== pn) blocks.push({ label: 'Notes', text: n });
-  if (cn && cn !== pn && cn !== n) blocks.push({ label: 'Chart notes', text: cn });
+  if (singleNote && singleNote !== pn) blocks.push({ label: 'Patient note', text: singleNote });
+  if (n && n !== pn && n !== singleNote) blocks.push({ label: 'Notes', text: n });
+  if (cn && cn !== pn && cn !== n && cn !== singleNote) blocks.push({ label: 'Chart notes', text: cn });
   return blocks;
 };
 
@@ -157,7 +164,14 @@ export const getRiskBadgeClass = (risk: DentrixFollowUpWorkItem['risk']): string
   return 'bg-emerald-50 text-emerald-700 border-emerald-200';
 };
 
-/** Dentrix `status === 3` means inactive — exclude from operational queues. */
+/**
+ * Operational lists: exclude non-patient (2) and archived (4).
+ * Dentrix status: 1=Patient, 2=Non-Patient, 3=Inactive, 4=Archived.
+ * Unknown/missing status stays listable for backward compatibility.
+ */
 export const isActiveDentrixPatient = (data: { status?: number }): boolean => {
-  return Number(data.status ?? 0) !== 3;
+  const s = Number(data.status ?? 0);
+  if (s === 0) return true;
+  if (s === 2 || s === 4) return false;
+  return true;
 };

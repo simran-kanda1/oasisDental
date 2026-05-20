@@ -3,16 +3,19 @@ import { cleanDentrixText, formatDentrixDateKey, parseDentrixDate, isActiveDentr
 import {
   appointmentLabelText,
   isAppointmentNoShow,
-  isEstimateAppointment,
-  isEstimateSent,
   patientHasFutureAppointmentAfter,
 } from '../lib/appointmentHeuristics';
-import { differenceInCalendarMonths, isAfter, isBefore, startOfDay, subDays } from 'date-fns';
+import { addDays, differenceInCalendarDays, differenceInCalendarMonths, isAfter, isBefore, startOfDay, subDays } from 'date-fns';
 
 export type AgeBucketFilter = 'all' | '0-3' | '3-6' | '6-9' | '9-12' | '12+';
 
+/** Recency of last qualifying visit (emerg / new patient queues). */
+export type VisitWeekBucketFilter = 'all' | 'w1' | 'w2' | 'w3' | 'w4plus';
+
 export interface QueueRow {
   id: string;
+  /** Firestore document id of the appointment row */
+  appointmentFirestoreId: string;
   patientId: string;
   patientName: string;
   detail: string;
@@ -35,11 +38,6 @@ export const FRONT_DESK_QUEUE_DEFS: FrontDeskQueueDef[] = [
     description: 'No-shows in the last 7 days and whether a future appointment exists.',
   },
   { id: 'hygiene_cc', label: 'Hygiene CC', description: 'Had a hygiene-type visit; no future hygiene appointment booked.' },
-  {
-    id: 'estimate_follow_ups',
-    label: 'Estimate follow ups',
-    description: 'Treatment plan rows where estimate was sent (estimate sent = true) but no future estimate-type visit booked.',
-  },
   { id: 'cleanings', label: 'Cleanings', description: 'Had a cleaning-type visit; no future cleaning-type appointment booked.' },
   { id: 'fillings', label: 'Fillings', description: 'Had restorative visit; no future restorative visit booked.' },
   { id: 'implants', label: 'Implants', description: 'Had implant-related visit; no future implant visit booked.' },
@@ -47,15 +45,16 @@ export const FRONT_DESK_QUEUE_DEFS: FrontDeskQueueDef[] = [
   { id: 'gum_grafting', label: 'Gum grafting', description: 'Had gum graft context; no future matching appointment booked.' },
   { id: 'extraction', label: 'Extraction', description: 'Had extraction-related visit; no future extraction visit booked.' },
   { id: 'general_anesthesia', label: 'General anesthesia', description: 'Had GA/sedation visit; no future matching visit booked.' },
-  {
-    id: 'estimates_to_send',
-    label: 'Estimates to send',
-    description: 'Treatment plan rows with production — estimate not yet sent (estimate sent = false).',
-  },
   { id: 'ortho_follow_ups', label: 'Ortho follow ups', description: 'Had ortho visit; no future ortho appointment booked.' },
   { id: 'tmj_mri', label: 'TMJ / MRI', description: 'Had TMJ/MRI-related visit; no future matching appointment booked.' },
   { id: 'emerg_follow_up', label: 'Emerg patient follow up', description: 'Had emergency visit; no future emergency-type visit booked.' },
   { id: 'new_patient_follow_up', label: 'New patient follow up', description: 'Had new-patient/consult visit; no future NP-style visit booked.' },
+  {
+    id: 'referral_doctor_followup',
+    label: 'Referrals',
+    description:
+      'Patients linked to a referring doctor or professional source (Dentrix ref_type = 1). Track when the referrer has been updated on the patient’s progress.',
+  },
 ];
 
 function patientActive(patientsById: Record<string, DentrixPatientDoc>, patientId: string): boolean {
@@ -68,6 +67,26 @@ function monthsSinceAppt(a: DentrixAppointmentDoc, now: Date): number | null {
   const d = parseDentrixDate(a.appointment_date);
   if (!d) return null;
   return differenceInCalendarMonths(startOfDay(now), startOfDay(d));
+}
+
+/** Whole days from appointment date to today for past appointments. */
+export function daysSincePastAppointment(a: DentrixAppointmentDoc, now: Date): number | null {
+  const d = parseDentrixDate(a.appointment_date);
+  if (!d) return null;
+  const today = startOfDay(now);
+  const ap = startOfDay(d);
+  if (!isBefore(ap, addDays(today, 1))) return null;
+  return differenceInCalendarDays(today, ap);
+}
+
+export function matchesVisitWeekBucket(daysSince: number | null, bucket: VisitWeekBucketFilter): boolean {
+  if (bucket === 'all') return true;
+  if (daysSince === null || daysSince < 0) return false;
+  if (bucket === 'w1') return daysSince <= 6;
+  if (bucket === 'w2') return daysSince >= 7 && daysSince <= 13;
+  if (bucket === 'w3') return daysSince >= 14 && daysSince <= 20;
+  if (bucket === 'w4plus') return daysSince >= 21;
+  return true;
 }
 
 export function matchesAgeBucket(monthsSince: number | null, bucket: AgeBucketFilter): boolean {
@@ -87,6 +106,7 @@ function apptRow(a: DentrixAppointmentDoc, patientsById: Record<string, DentrixP
   const name = cleanDentrixText(a.patient_name) || `Patient #${pid}`;
   return {
     id: `${a.id}-${pid}`,
+    appointmentFirestoreId: a.id,
     patientId: pid,
     patientName: name,
     detail: cleanDentrixText(a.reason) || cleanDentrixText(a.appointment_type) || 'Appointment',
@@ -152,6 +172,26 @@ function buildCategoryQueue(
     .filter((r): r is QueueRow => !!r);
 }
 
+function buildCategoryQueueWeekBucket(
+  matcher: (label: string) => boolean,
+  appointments: DentrixAppointmentDoc[],
+  patientsById: Record<string, DentrixPatientDoc>,
+  now: Date,
+  weekBucket: VisitWeekBucketFilter
+): QueueRow[] {
+  const lastByPatient = lastPastAppointmentPerPatient(matcher, appointments, now);
+  return Array.from(lastByPatient.values())
+    .filter((a) => {
+      const pid = String(a.patient_id ?? '');
+      if (hasFutureMatchingAppointment(pid, matcher, appointments, now)) return false;
+      return matchesVisitWeekBucket(daysSincePastAppointment(a, now), weekBucket);
+    })
+    .sort((a, b) => (b.appointment_date ?? '').localeCompare(a.appointment_date ?? ''))
+    .slice(0, 400)
+    .map((a) => apptRow(a, patientsById, now))
+    .filter((r): r is QueueRow => !!r);
+}
+
 function matchesHygieneCc(s: string): boolean {
   return /\b(hyg|hygiene|prophy|recall|cleaning|perio maint|periodontal maint|scaling|comprehensive periodic|4\s*mo|4m|3\s*mo|6\s*mo|re.?care)\b/i.test(s);
 }
@@ -170,17 +210,19 @@ const KEYWORD_MATCHERS: Record<string, (s: string) => boolean> = {
   new_patient_follow_up: (s) => /\b(new patient|np\b|new pt|consult|consultation|exam)\b/i.test(s),
 };
 
-const ESTIMATE_LABEL_MATCHER = (s: string) =>
-  /\b(estimate|treatment plan|tx plan|financial|pre-?det|predet|presentation)\b/i.test(s);
-
 export function buildQueueRows(
   queueId: string,
   appointments: DentrixAppointmentDoc[],
   patientsById: Record<string, DentrixPatientDoc>,
   _openOutreachLegacy: number,
   now = new Date(),
-  ageBucket: AgeBucketFilter = 'all'
+  ageBucket: AgeBucketFilter = 'all',
+  visitWeekBucket: VisitWeekBucketFilter = 'all'
 ): QueueRow[] {
+  if (queueId === 'referral_doctor_followup') {
+    return [];
+  }
+
   const today = startOfDay(now);
   const weekAgo = subDays(today, 7);
 
@@ -208,34 +250,6 @@ export function buildQueueRows(
       .filter((r): r is QueueRow => !!r);
   }
 
-  if (queueId === 'estimates_to_send') {
-    return apptsForActivePatients
-      .filter((a) => isEstimateAppointment(a) && !isEstimateSent(a))
-      .filter((a) => matchesAgeBucket(monthsSinceAppt(a, now), ageBucket))
-      .filter((a) => {
-        const pid = String(a.patient_id ?? '');
-        return !hasFutureMatchingAppointment(pid, ESTIMATE_LABEL_MATCHER, appointments, now);
-      })
-      .sort((a, b) => (b.appointment_date ?? '').localeCompare(a.appointment_date ?? ''))
-      .slice(0, 300)
-      .map((a) => apptRow(a, patientsById, now))
-      .filter((r): r is QueueRow => !!r);
-  }
-
-  if (queueId === 'estimate_follow_ups') {
-    return apptsForActivePatients
-      .filter((a) => isEstimateAppointment(a) && isEstimateSent(a))
-      .filter((a) => matchesAgeBucket(monthsSinceAppt(a, now), ageBucket))
-      .filter((a) => {
-        const pid = String(a.patient_id ?? '');
-        return !hasFutureMatchingAppointment(pid, ESTIMATE_LABEL_MATCHER, appointments, now);
-      })
-      .sort((a, b) => (b.appointment_date ?? '').localeCompare(a.appointment_date ?? ''))
-      .slice(0, 300)
-      .map((a) => apptRow(a, patientsById, now))
-      .filter((r): r is QueueRow => !!r);
-  }
-
   if (queueId === 'hygiene_cc') {
     const lastByPatient = lastPastAppointmentPerPatient((s) => matchesHygieneCc(s), appointments, now);
     return Array.from(lastByPatient.values())
@@ -249,6 +263,12 @@ export function buildQueueRows(
       .slice(0, 400)
       .map((a) => apptRow(a, patientsById, now))
       .filter((r): r is QueueRow => !!r);
+  }
+
+  if (queueId === 'emerg_follow_up' || queueId === 'new_patient_follow_up') {
+    const km = KEYWORD_MATCHERS[queueId];
+    if (!km) return [];
+    return buildCategoryQueueWeekBucket(km, apptsForActivePatients, patientsById, now, visitWeekBucket);
   }
 
   const km = KEYWORD_MATCHERS[queueId];
