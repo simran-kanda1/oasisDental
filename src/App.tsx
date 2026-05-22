@@ -1,77 +1,78 @@
-import React, { Suspense, lazy, useEffect, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useMemo } from 'react';
+import { BrowserRouter, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { PatientProfileProvider } from './contexts/PatientProfileContext';
-import { WixInquiriesBackgroundSync } from './components/WixInquiriesBackgroundSync';
 import { Sidebar, TopBar } from './components/layout/Sidebar';
-import { Tooth } from './components/ui/icons';
-import { type AppSection, getNavigateEventName } from './lib/navigation';
+import { AppLoadingSkeleton } from './components/ui/skeleton';
+import { pathToSection, DEFAULT_AUTHENTICATED_PATH, DEFAULT_STAFF_PATH, sectionToPath } from './lib/routes';
+import { registerAppNavigator, type AppSection } from './lib/navigation';
+import { NO_APPT_BOOKED_QUEUE_ID } from './data/queueRules';
 
 const LoginPage = lazy(() => import('./pages/LoginPage'));
 const DashboardPage = lazy(() => import('./pages/DashboardPage'));
 const AppointmentsPage = lazy(() => import('./pages/AppointmentsPage'));
-const FollowUpsPage = lazy(() => import('./pages/FollowUpsPage'));
 const FollowUpOutreachPage = lazy(() => import('./pages/FollowUpOutreachPage'));
 const FrontDeskQueuesPage = lazy(() => import('./pages/FrontDeskQueuesPage'));
 const InquiriesPage = lazy(() => import('./pages/InquiriesPage'));
 const EstimatesPage = lazy(() => import('./pages/EstimatesPage'));
-const EmailCampaignsPage = lazy(() => import('./pages/EmailCampaignsPage'));
-const WeaveConnectPage = lazy(() => import('./pages/WeaveConnectPage'));
 const AdminPortalPage = lazy(() => import('./pages/AdminPortalPage'));
 const StaffTasksPage = lazy(() => import('./pages/StaffTasksPage'));
+const SettingsPage = lazy(() => import('./pages/SettingsPage'));
+
+const PageFallback = () => (
+  <div className="p-4 space-y-4 max-w-full mx-auto">
+    <div className="h-16 rounded-md bg-slate-200/80 animate-pulse" />
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      {Array.from({ length: 4 }).map((_, i) => (
+        <div key={i} className="h-20 rounded-md bg-slate-200/60 animate-pulse" />
+      ))}
+    </div>
+    <div className="h-64 rounded-md bg-slate-200/50 animate-pulse" />
+  </div>
+);
 
 const AppShell: React.FC = () => {
   const { user, loading, isAdmin } = useAuth();
-  const [activeSection, setActiveSection] = useState<AppSection>('dashboard');
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  const { section, queueId } = useMemo(
+    () => pathToSection(location.pathname),
+    [location.pathname]
+  );
 
   useEffect(() => {
-    if (!user) return;
-    if (!isAdmin) setActiveSection('staffTasks');
-  }, [user, isAdmin]);
+    registerAppNavigator((path) => navigate(path));
+  }, [navigate]);
 
   useEffect(() => {
-    const eventName = getNavigateEventName();
-    const handler = (event: Event) => {
-      const section = (event as CustomEvent<AppSection>).detail;
-      if (!section) return;
-      if (section === 'admin' && !isAdmin) {
-        setActiveSection('dashboard');
-        return;
-      }
-      setActiveSection(section);
-    };
-    window.addEventListener(eventName, handler);
-    return () => window.removeEventListener(eventName, handler);
-  }, [isAdmin]);
+    if (!user || loading) return;
+    if (location.pathname === '/' || location.pathname === '') {
+      navigate(isAdmin ? DEFAULT_AUTHENTICATED_PATH : DEFAULT_STAFF_PATH, { replace: true });
+    }
+  }, [user, loading, isAdmin, location.pathname, navigate]);
+
+  useEffect(() => {
+    if (!user || loading) return;
+    if (section === 'admin' && !isAdmin) {
+      navigate(DEFAULT_AUTHENTICATED_PATH, { replace: true });
+    }
+  }, [user, loading, section, isAdmin, navigate]);
 
   if (loading) {
-    return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center font-sans overflow-hidden">
-        <div className="absolute inset-0 overflow-hidden pointer-events-none">
-          <div className="absolute top-[-20%] left-[-20%] w-[150%] h-[150%] bg-gradient-to-br from-teal-50/20 via-white to-blue-50/10 blur-3xl opacity-50" />
-        </div>
-        <div className="text-center space-y-8 relative z-10">
-          <div className="w-16 h-16 rounded bg-teal-600 flex items-center justify-center mx-auto shadow-2xl shadow-teal-500/20 animate-pulse">
-            <Tooth className="text-white" size={32} />
-          </div>
-          <div className="space-y-2">
-            <h1 className="text-2xl font-black text-slate-900 uppercase tracking-tighter">Oasis Dental</h1>
-            <p className="text-[10px] font-black text-slate-300 uppercase tracking-[0.3em] opacity-60">Syncing Registry...</p>
-          </div>
-        </div>
-      </div>
-    );
+    return <AppLoadingSkeleton />;
   }
 
   if (!user) {
     return (
-      <Suspense fallback={null}>
+      <Suspense fallback={<AppLoadingSkeleton />}>
         <LoginPage />
       </Suspense>
     );
   }
 
   const renderPage = () => {
-    switch (activeSection) {
+    switch (section) {
       case 'dashboard':
         return <DashboardPage />;
       case 'staffTasks':
@@ -79,52 +80,43 @@ const AppShell: React.FC = () => {
       case 'appointments':
         return <AppointmentsPage />;
       case 'followups':
-        return <FollowUpsPage />;
-      case 'followUpOutreach':
-        return <FollowUpOutreachPage initialTab="follow_up" />;
       case 'frontDeskQueues':
-        return <FrontDeskQueuesPage />;
+        return (
+          <FrontDeskQueuesPage
+            initialQueueId={section === 'followups' ? NO_APPT_BOOKED_QUEUE_ID : queueId}
+          />
+        );
+      case 'followUpOutreach':
+        return <FollowUpOutreachPage initialTab="pred_follow_up" />;
       case 'inquiries':
         return <InquiriesPage />;
       case 'estimates':
         return <EstimatesPage />;
-      case 'newsletter':
-        return <EmailCampaignsPage />;
-      case 'weave':
-        return <WeaveConnectPage />;
+      case 'settings':
+        return <SettingsPage />;
       case 'admin':
-        return isAdmin ? <AdminPortalPage /> : <DashboardPage />;
+        return isAdmin ? <AdminPortalPage /> : <Navigate to={DEFAULT_AUTHENTICATED_PATH} replace />;
       default:
         return <DashboardPage />;
     }
   };
 
+  const handleSectionChange = (id: string) => {
+    if (id === 'admin' && !isAdmin) {
+      navigate(DEFAULT_AUTHENTICATED_PATH);
+      return;
+    }
+    navigate(sectionToPath(id as AppSection));
+  };
+
   return (
     <PatientProfileProvider>
-      <WixInquiriesBackgroundSync />
       <div className="min-h-screen bg-slate-50 flex font-sans text-slate-900 selection:bg-teal-100 selection:text-teal-900">
-        <Sidebar
-          activeSection={activeSection}
-          onSectionChange={(s) => {
-            if (s === 'admin' && !isAdmin) {
-              setActiveSection('dashboard');
-              return;
-            }
-            setActiveSection(s as AppSection);
-          }}
-        />
+        <Sidebar activeSection={section} onSectionChange={handleSectionChange} />
         <div className="flex-1 flex flex-col min-w-0">
-          <TopBar section={activeSection} />
+          <TopBar section={section} />
           <main className="flex-1 overflow-auto bg-slate-50/50">
-            <Suspense
-              fallback={
-                <div className="h-full min-h-[200px] flex items-center justify-center text-[11px] font-black uppercase tracking-[0.2em] text-slate-400">
-                  Loading workspace...
-                </div>
-              }
-            >
-              {renderPage()}
-            </Suspense>
+            <Suspense fallback={<PageFallback />}>{renderPage()}</Suspense>
           </main>
         </div>
       </div>
@@ -134,9 +126,11 @@ const AppShell: React.FC = () => {
 
 function App() {
   return (
-    <AuthProvider>
-      <AppShell />
-    </AuthProvider>
+    <BrowserRouter>
+      <AuthProvider>
+        <AppShell />
+      </AuthProvider>
+    </BrowserRouter>
   );
 }
 

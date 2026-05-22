@@ -1,6 +1,6 @@
-import type { DentrixAppointmentDoc } from './dentrix';
-import { cleanDentrixText, parseDentrixDate } from './dentrix';
-import { isAfter, startOfDay } from 'date-fns';
+import type { DentrixAppointmentDoc, DentrixPatientAppointmentInfoDoc } from './dentrix';
+import { cleanDentrixText, formatDentrixDateKey, parseDentrixDate } from './dentrix';
+import { isAfter, isSameDay, startOfDay } from 'date-fns';
 
 export function appointmentLabelText(a: DentrixAppointmentDoc): string {
   const parts = [
@@ -64,4 +64,61 @@ export function patientHasFutureEstimateTypeAppointment(
     const d = parseDentrixDate(x.appointment_date);
     return !!d && isAfter(d, t0);
   });
+}
+
+function appointmentReasonLabel(a: DentrixAppointmentDoc): string {
+  return (
+    cleanDentrixText(a.reason) ||
+    cleanDentrixText(a.appointment_type) ||
+    cleanDentrixText(a.appt_type) ||
+    cleanDentrixText(a.appointmentType) ||
+    '—'
+  );
+}
+
+/** Earliest future appointment per patient for estimates tables. */
+export function buildNextAppointmentLabelByPatientId(
+  appointments: DentrixAppointmentDoc[],
+  patientInfoById: Record<string, DentrixPatientAppointmentInfoDoc> = {},
+  today: Date = new Date()
+): Record<string, string> {
+  const t0 = startOfDay(today);
+  const earliest: Record<string, { at: Date; appt: DentrixAppointmentDoc }> = {};
+
+  for (const a of appointments) {
+    const pid = String(a.patient_id ?? '');
+    if (!pid) continue;
+    const d = parseDentrixDate(a.appointment_date);
+    if (!d || !isAfter(d, t0)) continue;
+    const cur = earliest[pid];
+    if (!cur || d < cur.at) earliest[pid] = { at: d, appt: a };
+  }
+
+  const out: Record<string, string> = {};
+  for (const [pid, { appt }] of Object.entries(earliest)) {
+    const dateLabel = formatDentrixDateKey(appt.appointment_date) ?? '—';
+    out[pid] = `${dateLabel} · ${appointmentReasonLabel(appt)}`;
+  }
+
+  for (const info of Object.values(patientInfoById)) {
+    const pid = String(info.patient_id ?? info.id);
+    if (!pid || out[pid]) continue;
+    const d = parseDentrixDate(info.next_appointment_date);
+    if (!d || !isAfter(d, t0)) continue;
+    const dateLabel = formatDentrixDateKey(info.next_appointment_date);
+    const onDate = appointments.filter((a) => {
+      if (String(a.patient_id ?? '') !== pid) return false;
+      const ad = parseDentrixDate(a.appointment_date);
+      return !!ad && isSameDay(ad, d);
+    });
+    onDate.sort((a, b) => {
+      const da = parseDentrixDate(a.appointment_date)?.getTime() ?? 0;
+      const db = parseDentrixDate(b.appointment_date)?.getTime() ?? 0;
+      return da - db;
+    });
+    const reason = onDate[0] ? appointmentReasonLabel(onDate[0]) : '—';
+    out[pid] = `${dateLabel} · ${reason}`;
+  }
+
+  return out;
 }

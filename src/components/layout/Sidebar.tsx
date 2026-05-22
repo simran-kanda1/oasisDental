@@ -1,12 +1,21 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { cn } from '../../lib/utils';
 import {
-    LayoutDashboard, Calendar, MessageSquare, PhoneCall, Mail,
+    LayoutDashboard, Calendar, MessageSquare,
     Menu, X, ChevronRight, LogOut, Bell,
-    ShieldCheck, ListTodo, UsersRound, LayoutList,
+    ShieldCheck, ListTodo, UsersRound, LayoutList, Settings,
 } from 'lucide-react';
+import { GlobalPatientSearch } from '../GlobalPatientSearch';
 import { Tooth } from '../ui/icons';
 import { useAuth } from '../../contexts/AuthContext';
+import {
+    type AppNotification,
+    isNotificationRead,
+    markAllNotificationsRead,
+    markNotificationRead,
+} from '../../lib/notifications';
+import { navigateToSection } from '../../lib/navigation';
+import { NO_APPT_BOOKED_QUEUE_ID } from '../../data/queueRules';
 import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { format } from 'date-fns';
@@ -22,11 +31,9 @@ const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'staffTasks', label: 'Checklist', icon: ListTodo },
     { id: 'appointments', label: 'Appointments', icon: Calendar },
-    { id: 'frontDeskQueues', label: 'Queues', icon: LayoutList },
-    { id: 'followups', label: 'No appt booked', icon: PhoneCall },
+    { id: 'frontDeskQueues', label: 'No future appointments', icon: LayoutList },
     { id: 'followUpOutreach', label: 'Estimates', icon: UsersRound },
     { id: 'inquiries', label: 'Inquiries', icon: MessageSquare },
-    { id: 'newsletter', label: 'News', icon: Mail },
 ];
 
 export const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange }) => {
@@ -106,6 +113,19 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange
                     </div>
                 )}
                 <button
+                    onClick={() => onSectionChange('settings')}
+                    className={cn(
+                        "w-full flex items-center gap-3 px-3 py-2 rounded-md text-[10px] font-bold uppercase tracking-tight transition-all",
+                        activeSection === 'settings'
+                            ? "bg-teal-50 text-teal-600 border border-teal-100"
+                            : "text-slate-400 hover:text-slate-600 hover:bg-slate-50",
+                        collapsed && "justify-center px-2"
+                    )}
+                >
+                    <Settings size={16} className="shrink-0" />
+                    {!collapsed && <span>Settings</span>}
+                </button>
+                <button
                     onClick={() => logout()}
                     className={cn(
                         "w-full flex items-center gap-3 px-3 py-2 text-[10px] font-black text-slate-400 hover:text-rose-600 transition-all uppercase tracking-widest leading-none",
@@ -155,24 +175,33 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange
 
 export const TopBar: React.FC<{ section: string }> = ({ section }) => {
     const { userProfile, user, isAdmin } = useAuth();
-    const [taskNotifications, setTaskNotifications] = useState<any[]>([]);
-    const [summaryNotifications, setSummaryNotifications] = useState<any[]>([]);
+    const [notifications, setNotifications] = useState<AppNotification[]>([]);
     const [showNotifications, setShowNotifications] = useState(false);
+    const [readTick, setReadTick] = useState(0);
 
     const displayName = userProfile?.displayName ?? user?.email?.split('@')[0] ?? 'User';
 
     useEffect(() => {
         const todayStr = format(new Date(), 'yyyy-MM-dd');
+
         const qTasks = query(collection(db, 'tasks'), where('status', '!=', 'completed'));
         const unsubTasks = onSnapshot(qTasks, (snap) => {
-            const items: any[] = [];
+            const taskItems: AppNotification[] = [];
             snap.docs.forEach((docItem) => {
                 const data = docItem.data();
                 if ((data.type === 'directive' && data.assignedTo === user?.email) || (data.type === 'protocol' && data.date === todayStr)) {
-                    items.push({ id: docItem.id, title: data.title, type: 'task' });
+                    taskItems.push({
+                        id: `task-${docItem.id}`,
+                        title: String(data.title ?? 'Task'),
+                        kind: 'task',
+                        href: '/checklist',
+                    });
                 }
             });
-            setTaskNotifications(items);
+            setNotifications((prev) => {
+                const rest = prev.filter((n) => n.kind !== 'task');
+                return [...rest, ...taskItems];
+            });
         });
 
         const unsubFollowups = onSnapshot(query(collection(db, 'followUps'), where('nextAppointmentBooked', '==', false)), (snap) => {
@@ -183,21 +212,43 @@ export const TopBar: React.FC<{ section: string }> = ({ section }) => {
                 if (isOpenOutreachItem(data)) outreach += 1;
                 else if (isRecallFollowUpDoc(data)) recall += 1;
             });
-            setSummaryNotifications((prev) => {
-                const rest = prev.filter((x) => x.id !== 'summary-recall' && x.id !== 'summary-outreach');
-                return [
-                    ...rest,
-                    { id: 'summary-recall', title: `${recall} no follow-up appt booked`, type: 'summary' },
-                    { id: 'summary-outreach', title: `${outreach} estimate follow-ups open`, type: 'summary' },
-                ];
+            setNotifications((prev) => {
+                const rest = prev.filter((n) => n.kind !== 'recall' && n.kind !== 'outreach');
+                const next = [...rest];
+                if (recall > 0) {
+                    next.push({
+                        id: 'summary-recall',
+                        title: `${recall} no follow-up appt booked`,
+                        kind: 'recall',
+                        href: `/queues/${NO_APPT_BOOKED_QUEUE_ID}`,
+                    });
+                }
+                if (outreach > 0) {
+                    next.push({
+                        id: 'summary-outreach',
+                        title: `${outreach} estimate follow-ups open`,
+                        kind: 'outreach',
+                        href: '/estimates',
+                    });
+                }
+                return next;
             });
         });
 
         const unsubInquiries = onSnapshot(collection(db, 'wixInquiries'), (snap) => {
             const open = snap.docs.filter((d) => isOpenWixInquiryDoc(d.data() as Record<string, unknown>)).length;
-            setSummaryNotifications(prev => {
-                const rest = prev.filter((x) => x.id !== 'summary-inquiries');
-                return [...rest, { id: 'summary-inquiries', title: `${open} open website inquiries`, type: 'summary' }];
+            setNotifications((prev) => {
+                const rest = prev.filter((n) => n.kind !== 'inquiry');
+                if (open <= 0) return rest;
+                return [
+                    ...rest,
+                    {
+                        id: 'summary-inquiries',
+                        title: `${open} open website inquiries`,
+                        kind: 'inquiry',
+                        href: '/inquiries',
+                    },
+                ];
             });
         });
 
@@ -208,55 +259,126 @@ export const TopBar: React.FC<{ section: string }> = ({ section }) => {
         };
     }, [user?.email]);
 
-    const notifications = [...summaryNotifications, ...taskNotifications];
+    const unreadCount = useMemo(() => {
+        void readTick;
+        return notifications.filter((n) => !isNotificationRead(n.id)).length;
+    }, [notifications, readTick]);
+
+    const grouped = useMemo(() => {
+        const order: AppNotification['kind'][] = ['task', 'recall', 'outreach', 'inquiry'];
+        const labels: Record<AppNotification['kind'], string> = {
+            task: 'Your tasks',
+            recall: 'No future appointments',
+            outreach: 'Estimates',
+            inquiry: 'Inquiries',
+        };
+        return order
+            .map((kind) => ({
+                kind,
+                label: labels[kind],
+                items: notifications.filter((n) => n.kind === kind),
+            }))
+            .filter((g) => g.items.length > 0);
+    }, [notifications]);
+
+    const handleOpenNotification = (n: AppNotification) => {
+        markNotificationRead(n.id);
+        setReadTick((t) => t + 1);
+        setShowNotifications(false);
+        navigateToSection(
+            n.kind === 'task'
+                ? 'staffTasks'
+                : n.kind === 'recall'
+                  ? 'frontDeskQueues'
+                  : n.kind === 'outreach'
+                    ? 'followUpOutreach'
+                    : 'inquiries',
+            n.kind === 'recall' ? NO_APPT_BOOKED_QUEUE_ID : undefined
+        );
+    };
 
     const sectionLabels: Record<string, string> = {
         dashboard: 'Dashboard',
         staffTasks: 'Checklist',
         appointments: 'Appointments',
-        frontDeskQueues: 'Front desk queues',
-        followups: 'No follow up appt booked',
+        frontDeskQueues: 'No future appointments',
+        followups: 'No future appointments',
         followUpOutreach: 'Estimate follow-up',
         inquiries: 'Inquiries',
         estimates: 'Estimate follow-up',
-        newsletter: 'News',
         admin: 'Admin',
+        settings: 'Settings',
     };
 
     const today = format(new Date(), 'EEEE, MMMM d');
 
     return (
-        <header className="h-12 bg-white/80 backdrop-blur-md border-b border-slate-100 flex items-center px-8 justify-between sticky top-0 z-20">
-            <div>
-                <h2 className="text-xs font-bold text-slate-800 tracking-tight uppercase leading-none">{sectionLabels[section] ?? section}</h2>
+        <header className="h-12 bg-white/80 backdrop-blur-md border-b border-slate-100 flex items-center px-4 md:px-8 justify-between sticky top-0 z-20 gap-4">
+            <div className="min-w-0 shrink">
+                <h2 className="text-xs font-bold text-slate-800 tracking-tight uppercase leading-none truncate">{sectionLabels[section] ?? section}</h2>
                 <p className="text-[9px] font-bold text-teal-600/50 mt-1 uppercase tracking-widest leading-none">{today}</p>
             </div>
 
-            <div className="flex items-center gap-6">
-                <div
-                    onClick={() => setShowNotifications(!showNotifications)}
-                    className="relative cursor-pointer hover:bg-slate-50 p-2 rounded transition-colors border border-transparent hover:border-slate-100"
-                >
-                    <div className="flex items-center gap-2">
-                        <Bell size={14} className={cn("transition-colors", notifications.length > 0 ? "text-teal-600" : "text-slate-200")} />
-                        {notifications.length > 0 && (
-                            <span className="w-3.5 h-3.5 bg-rose-500 rounded-full text-[8px] flex items-center justify-center text-white font-black">
-                                {notifications.length}
+            <div className="flex items-center gap-3 md:gap-5 flex-1 justify-end min-w-0">
+                <GlobalPatientSearch />
+
+                <div className="relative shrink-0">
+                    <button
+                        type="button"
+                        onClick={() => setShowNotifications(!showNotifications)}
+                        className="relative hover:bg-slate-50 p-2 rounded transition-colors border border-transparent hover:border-slate-100"
+                    >
+                        <Bell size={14} className={cn('transition-colors', unreadCount > 0 ? 'text-teal-600' : 'text-slate-300')} />
+                        {unreadCount > 0 && (
+                            <span className="absolute -top-0.5 -right-0.5 w-3.5 h-3.5 bg-rose-500 rounded-full text-[8px] flex items-center justify-center text-white font-black">
+                                {unreadCount}
                             </span>
                         )}
-                    </div>
+                    </button>
                     {showNotifications && (
                         <>
                             <div className="fixed inset-0 z-40" onClick={() => setShowNotifications(false)} />
-                            <div className="absolute right-0 mt-3 w-72 bg-white rounded-md shadow-2xl border border-slate-200 p-2 z-50">
-                                <h4 className="p-3 border-b text-[9px] font-bold text-slate-900 uppercase tracking-widest">Active Alerts</h4>
-                                <div className="max-h-60 overflow-y-auto scrollbar-none p-1 space-y-1">
-                                    {notifications.length === 0 ? (
-                                        <div className="p-8 text-center opacity-30 text-[9px] font-bold uppercase tracking-widest">Clear</div>
+                            <div className="absolute right-0 mt-3 w-80 bg-white rounded-lg shadow-2xl border border-slate-200 z-50 overflow-hidden">
+                                <div className="flex items-center justify-between px-3 py-2 border-b border-slate-100">
+                                    <h4 className="text-[9px] font-bold text-slate-900 uppercase tracking-widest">Notifications</h4>
+                                    {notifications.length > 0 && (
+                                        <button
+                                            type="button"
+                                            className="text-[9px] font-bold text-teal-600 uppercase"
+                                            onClick={() => {
+                                                markAllNotificationsRead(notifications.map((n) => n.id));
+                                                setReadTick((t) => t + 1);
+                                            }}
+                                        >
+                                            Mark all read
+                                        </button>
+                                    )}
+                                </div>
+                                <div className="max-h-72 overflow-y-auto p-2">
+                                    {grouped.length === 0 ? (
+                                        <div className="p-8 text-center text-[10px] text-slate-400 font-bold uppercase tracking-widest">All clear</div>
                                     ) : (
-                                        notifications.map(n => (
-                                            <div key={n.id} className="p-3 rounded-md hover:bg-slate-50 text-[10px] font-bold text-slate-700 uppercase tracking-tight truncate border border-transparent hover:border-slate-100 transition-all">
-                                                {n.title}
+                                        grouped.map((group) => (
+                                            <div key={group.kind} className="mb-3 last:mb-0">
+                                                <p className="px-2 py-1 text-[8px] font-black text-slate-400 uppercase tracking-[0.2em]">{group.label}</p>
+                                                {group.items.map((n) => {
+                                                    const unread = !isNotificationRead(n.id);
+                                                    return (
+                                                        <button
+                                                            key={n.id}
+                                                            type="button"
+                                                            onClick={() => handleOpenNotification(n)}
+                                                            className={cn(
+                                                                'w-full text-left p-2.5 rounded-md text-[10px] font-bold text-slate-700 tracking-tight border transition-all',
+                                                                unread
+                                                                    ? 'bg-teal-50/50 border-teal-100 hover:bg-teal-50'
+                                                                    : 'border-transparent hover:bg-slate-50 opacity-70'
+                                                            )}
+                                                        >
+                                                            {n.title}
+                                                        </button>
+                                                    );
+                                                })}
                                             </div>
                                         ))
                                     )}
@@ -266,15 +388,13 @@ export const TopBar: React.FC<{ section: string }> = ({ section }) => {
                     )}
                 </div>
 
-                <div className="h-5 w-px bg-slate-100" />
+                <div className="h-5 w-px bg-slate-100 hidden sm:block shrink-0" />
 
-                <div className="flex items-center gap-3">
-                    <div className="text-right hidden sm:block">
-                        <p className="text-[10px] font-bold text-slate-900 uppercase leading-none">{displayName}</p>
-                        <p className={cn("text-[8px] font-bold uppercase tracking-widest mt-1 opacity-60 leading-none", isAdmin ? "text-teal-600" : "text-slate-400")}>
-                            {isAdmin ? 'Admin' : 'Staff'}
-                        </p>
-                    </div>
+                <div className="text-right hidden sm:block shrink-0">
+                    <p className="text-[10px] font-bold text-slate-900 uppercase leading-none">{displayName}</p>
+                    <p className={cn('text-[8px] font-bold uppercase tracking-widest mt-1 opacity-60 leading-none', isAdmin ? 'text-teal-600' : 'text-slate-400')}>
+                        {isAdmin ? 'Admin' : 'Staff'}
+                    </p>
                 </div>
             </div>
         </header>

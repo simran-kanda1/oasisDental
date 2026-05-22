@@ -21,13 +21,16 @@ import {
     startOfWeek,
     addMonths,
     isSameDay,
-    isSameMonth,
+    getDaysInMonth,
 } from 'date-fns';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { cn } from '../lib/utils';
-import { MessageSquare, ChevronLeft, ChevronRight, ClipboardList, ListChecks } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ListChecks } from 'lucide-react';
 import { navigateToSection } from '../lib/navigation';
+import { logAudit } from '../lib/auditTrail';
+import { ChecklistWeekStrip, type ChecklistTaskRow } from '../components/checklist/ChecklistBoard';
+import { NO_APPT_BOOKED_QUEUE_ID } from '../data/queueRules';
 import { isRecallFollowUpDoc, isOpenOutreachItem } from '../lib/followUpQueues';
 import { isOpenWixInquiryDoc } from '../lib/wixInquiryCounts';
 import { deriveTaskGroupFromTitle, TASK_GROUP_ORDER, type TaskGroupId } from '../lib/taskGroups';
@@ -36,9 +39,11 @@ import {
     DENTIST_CHECKLIST_LABELS,
     DENTIST_TASK_TYPE,
     RECEPTION_COLUMN_LABELS,
+    DENTIST_ASSIGNMENT_GENERAL,
     receptionColumnIndex,
     type DentistChecklistId,
 } from '../lib/staffChecklist';
+import { ChecklistColumn } from '../components/checklist/ChecklistColumn';
 
 interface Task {
     id: string;
@@ -50,6 +55,7 @@ interface Task {
     priority: 'low' | 'medium' | 'high';
     date?: string;
     assignedTo?: string;
+    assignmentScope?: 'general' | 'user';
     taskId?: string;
     taskGroup?: TaskGroupId;
     notes?: string;
@@ -67,6 +73,13 @@ function dentrixDayOfWeek(d: Date): number {
     const dow = d.getDay();
     if (dow === 0) return 1;
     return dow;
+}
+
+/** Keep the same calendar day when changing month (e.g. May 21 → Apr 21). */
+function alignDateToMonth(month: Date, date: Date): Date {
+    const monthStart = startOfMonth(month);
+    const day = Math.min(date.getDate(), getDaysInMonth(monthStart));
+    return new Date(monthStart.getFullYear(), monthStart.getMonth(), day);
 }
 
 function templatesForDate(schedule: RecurringTask[], d: Date): RecurringTask[] {
@@ -230,6 +243,20 @@ const StaffTasksPage: React.FC = () => {
             completedBy: nextStatus === 'completed' ? user?.email : null,
             completedByName: nextStatus === 'completed' ? userProfile?.displayName : null,
         });
+        if (user?.uid && user.email) {
+            await logAudit({
+                entityType: 'task',
+                entityId: task.id,
+                action: 'status_change',
+                field: 'status',
+                previousValue: task.status,
+                newValue: nextStatus,
+                userId: user.uid,
+                userEmail: user.email,
+                userName: userProfile?.displayName ?? user.email,
+                detail: task.title,
+            });
+        }
     };
 
     const handleSaveComment = async (id: string) => {
@@ -289,53 +316,59 @@ const StaffTasksPage: React.FC = () => {
         return monthTasksByDate.get(dateStr)?.find((t) => t.taskId === templateId);
     };
 
-    const TaskRow = ({ task }: { task: Task }) => {
-        const done = task.status === 'completed';
-        const completedAt =
-            task.completedAt && typeof task.completedAt.toDate === 'function'
-                ? format(task.completedAt.toDate(), 'h:mm a')
-                : null;
-        return (
-            <div
-                className={cn(
-                    'group flex items-start gap-3 px-3 py-2.5 border-b border-slate-100 last:border-0 transition-colors',
-                    done && 'bg-slate-50 opacity-70'
-                )}
-            >
-                <button
-                    type="button"
-                    onClick={() => handleToggleTask(task)}
-                    className={cn(
-                        'mt-0.5 w-4 h-4 rounded border shrink-0 flex items-center justify-center',
-                        done ? 'bg-teal-600 border-teal-600' : 'border-slate-300 hover:border-teal-500 bg-white'
-                    )}
-                >
-                    {done && <div className="w-1.5 h-1.5 bg-white rounded-sm" />}
-                </button>
-                <div className="flex-1 min-w-0">
-                    <p className={cn('text-[12px] font-medium text-slate-800 leading-snug', done && 'line-through text-slate-500')}>
-                        {task.title}
-                    </p>
-                    {done && (
-                        <p className="text-[10px] text-slate-500 mt-1">
-                            Done {completedAt ?? ''}
-                            {task.completedByName ? ` · ${task.completedByName}` : ''}
-                        </p>
-                    )}
-                </div>
-                <button
-                    type="button"
-                    onClick={() => {
-                        setActiveCommentId(task.id);
-                        setCommentDraft(task.notes || '');
-                    }}
-                    className="p-1 text-slate-300 hover:text-teal-600"
-                >
-                    <MessageSquare size={14} />
-                </button>
-            </div>
+    const toRow = (t: Task, extra: Partial<ChecklistTaskRow>): ChecklistTaskRow => ({
+        id: t.id,
+        title: t.title,
+        status: t.status,
+        priority: t.priority,
+        taskGroup: (t.taskGroup as TaskGroupId) || deriveTaskGroupFromTitle(t.title),
+        notes: t.notes,
+        completedAt: t.completedAt,
+        completedByName: t.completedByName,
+        section: 'assigned',
+        ...extra,
+    });
+
+    const assignedRows = useMemo((): ChecklistTaskRow[] => {
+        const rows: ChecklistTaskRow[] = directives.map((t) =>
+            toRow(t, { section: 'assigned', columnLabel: 'Assigned to you' })
         );
-    };
+        for (const t of dentistTasks) {
+            const scope = t.assignmentScope ?? (t.assignedTo && t.assignedTo !== DENTIST_ASSIGNMENT_GENERAL ? 'user' : 'general');
+            if (scope === 'user' && t.assignedTo === user?.email) {
+                rows.push(
+                    toRow(t, {
+                        section: 'assigned',
+                        assigneeLabel: DENTIST_CHECKLIST_LABELS[t.dentist === 'vick' ? 'vick' : 'rick'],
+                    })
+                );
+            }
+        }
+        return rows;
+    }, [directives, dentistTasks, user?.email]);
+
+    const receptionRowsCol = (col: 0 | 1) =>
+        protocolSplit[col === 0 ? 'left' : 'right'].map((t) =>
+            toRow(t, { section: 'reception', columnLabel: RECEPTION_COLUMN_LABELS[col] })
+        );
+
+    const dentistRowsCol = (dentistId: DentistChecklistId) =>
+        dentistTasksById[dentistId].map((t) =>
+            toRow(t, {
+                section: 'dentist',
+                dentistLabel: DENTIST_CHECKLIST_LABELS[dentistId],
+                assigneeLabel:
+                    (t.assignmentScope ?? 'general') === 'general' || !t.assignedTo || t.assignedTo === DENTIST_ASSIGNMENT_GENERAL
+                        ? 'General'
+                        : t.assignedTo?.split('@')[0],
+            })
+        );
+
+    const taskById = useMemo(() => {
+        const map = new Map<string, Task>();
+        [...directives, ...protocols, ...dentistTasks].forEach((t) => map.set(t.id, t));
+        return map;
+    }, [directives, protocols, dentistTasks]);
 
     const WeekDayColumn = ({ day }: { day: Date }) => {
         const ds = format(day, 'yyyy-MM-dd');
@@ -406,11 +439,29 @@ const StaffTasksPage: React.FC = () => {
                     <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Week view · month navigation</p>
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
-                    <Button variant="outline" size="sm" className="h-8 text-[10px] font-bold uppercase" onClick={() => setViewMonth((m) => addMonths(m, -1))}>
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 text-[10px] font-bold uppercase"
+                        onClick={() => {
+                            const nextMonth = startOfMonth(addMonths(viewMonth, -1));
+                            setViewMonth(nextMonth);
+                            setSelectedDate(alignDateToMonth(nextMonth, selectedDate));
+                        }}
+                    >
                         <ChevronLeft className="w-4 h-4" />
                     </Button>
                     <span className="text-xs font-black text-slate-800 min-w-[120px] text-center uppercase">{format(viewMonth, 'MMMM yyyy')}</span>
-                    <Button variant="outline" size="sm" className="h-8 text-[10px] font-bold uppercase" onClick={() => setViewMonth((m) => addMonths(m, 1))}>
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 text-[10px] font-bold uppercase"
+                        onClick={() => {
+                            const nextMonth = startOfMonth(addMonths(viewMonth, 1));
+                            setViewMonth(nextMonth);
+                            setSelectedDate(alignDateToMonth(nextMonth, selectedDate));
+                        }}
+                    >
                         <ChevronRight className="w-4 h-4" />
                     </Button>
                     <Button size="sm" className="h-8 text-[10px] font-bold uppercase bg-teal-600" onClick={() => { const t = new Date(); setViewMonth(startOfMonth(t)); setSelectedDate(t); }}>
@@ -418,12 +469,6 @@ const StaffTasksPage: React.FC = () => {
                     </Button>
                 </div>
             </div>
-
-            {!isSameMonth(selectedDate, viewMonth) && (
-                <p className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
-                    Selected day is outside the visible month — use arrows to switch month or pick a day below.
-                </p>
-            )}
 
             <div className="rounded-lg border border-teal-100 bg-gradient-to-br from-teal-50/80 to-white p-4 flex flex-col sm:flex-row gap-4 sm:items-center">
                 <div className="flex items-start gap-3 shrink-0">
@@ -435,14 +480,14 @@ const StaffTasksPage: React.FC = () => {
                         <ol className="mt-2 space-y-1.5 text-[11px] text-slate-700 list-decimal list-inside leading-snug max-w-xl">
                             <li>Pick today on the week strip (amber outline = today).</li>
                             <li>Check off every protocol for that day; add a note on the speech icon if something is blocked.</li>
-                            <li>Work directives at the top first — they are assigned only to you.</li>
-                            <li>Use the counters below to jump to recalls, follow-up outreach, or inquiries.</li>
+                            <li>Work assigned-to-you items at the top first.</li>
+                            <li>Use the counters below to jump to no future appointments, estimates, or inquiries.</li>
                         </ol>
                     </div>
                 </div>
                 <div className="flex flex-wrap gap-2 sm:justify-end sm:ml-auto">
                     <Button variant="outline" size="sm" className="h-8 text-[9px] font-bold uppercase" onClick={() => navigateToSection('frontDeskQueues')}>
-                        Queues
+                        No future appointments
                     </Button>
                     <Button variant="outline" size="sm" className="h-8 text-[9px] font-bold uppercase" onClick={() => navigateToSection('followUpOutreach')}>
                         Estimates
@@ -450,21 +495,19 @@ const StaffTasksPage: React.FC = () => {
                 </div>
             </div>
 
-            <div className="bg-white border border-slate-200 rounded-lg p-3 overflow-x-auto">
-                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2 px-1 flex items-center gap-2">
-                    <ClipboardList className="w-3.5 h-3.5" aria-hidden />
-                    This week (Mon–Sat) — tap a day to load its protocols
-                </p>
-                <div className="flex gap-2 min-w-[720px]">{weekDays.map((d) => <WeekDayColumn key={d.toISOString()} day={d} />)}</div>
-            </div>
+            <ChecklistWeekStrip>
+                {weekDays.map((d) => (
+                    <WeekDayColumn key={d.toISOString()} day={d} />
+                ))}
+            </ChecklistWeekStrip>
 
-            <div className="bg-white border border-slate-200 rounded-lg p-4">
-                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 mb-4 border-b border-slate-100 pb-3">
+            <div className="bg-white border border-slate-200 rounded-lg p-4 shadow-sm space-y-4">
+                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 border-b border-slate-100 pb-3">
                     <div>
                         <p className="text-[9px] font-black text-teal-600 uppercase tracking-widest">Selected day</p>
                         <p className="text-lg font-black text-slate-900">{format(selectedDate, 'EEEE, MMMM d, yyyy')}</p>
                     </div>
-                    <div className="flex gap-2">
+                    <div className="flex gap-2 flex-wrap">
                         <Button variant="outline" size="sm" className="h-8 text-[10px] font-bold uppercase" onClick={() => setSelectedDate((d) => addDays(d, -1))}>
                             Prev day
                         </Button>
@@ -474,79 +517,85 @@ const StaffTasksPage: React.FC = () => {
                     </div>
                 </div>
 
-                <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2">Directives (assigned to you)</p>
-                <div className="rounded-lg border border-slate-200 divide-y divide-slate-100 mb-6">
-                    {directives.length === 0 ? (
-                        <div className="p-6 text-center space-y-1">
-                            <p className="text-[10px] font-bold text-slate-400 uppercase">No directives right now</p>
-                            <p className="text-[11px] text-slate-500 leading-snug max-w-md mx-auto">
-                                One-off tasks from the team show here. If something urgent is missing, ask an admin to add a directive assigned to you.
-                            </p>
-                        </div>
-                    ) : (
-                        directives.map((t) => <TaskRow key={t.id} task={t} />)
-                    )}
-                </div>
+                <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">Assigned to you</p>
+                <ChecklistColumn
+                    title="Assigned to you"
+                    rows={assignedRows}
+                    onToggle={(id) => {
+                        const task = taskById.get(id);
+                        if (task) void handleToggleTask(task);
+                    }}
+                    onOpenNote={(id, notes) => {
+                        setActiveCommentId(id);
+                        setCommentDraft(notes);
+                    }}
+                    emptyMessage="Nothing assigned to you for this day."
+                />
 
-                <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2">
-                    Reception duties — split evenly between two secretaries
+                <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest pt-2">
+                    Reception — two columns
                 </p>
-                {protocolsSorted.length === 0 ? (
-                    <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50/50 p-8 text-center space-y-2">
-                        <p className="text-xs font-bold text-slate-600">No protocol checklist for this calendar day</p>
-                        <p className="text-[11px] text-slate-500 max-w-lg mx-auto leading-relaxed">
-                            The recurring schedule may not define tasks for {format(selectedDate, 'EEEE')}, or templates are still syncing. Use the week strip to confirm what should run; protocols appear once the schedule is loaded for that weekday.
-                        </p>
-                    </div>
-                ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="rounded-lg border border-slate-200 overflow-hidden min-h-[120px]">
-                        <p className="text-[9px] font-black text-teal-700 uppercase tracking-widest px-3 py-2 bg-teal-50 border-b border-teal-100">
-                            {RECEPTION_COLUMN_LABELS[0]} ({protocolSplit.left.length})
-                        </p>
-                        {protocolSplit.left.length === 0 ? (
-                            <p className="p-4 text-[10px] text-slate-400 text-center">No tasks in this column</p>
-                        ) : (
-                            protocolSplit.left.map((t) => <TaskRow key={t.id} task={t} />)
-                        )}
-                    </div>
-                    <div className="rounded-lg border border-slate-200 overflow-hidden min-h-[120px]">
-                        <p className="text-[9px] font-black text-teal-700 uppercase tracking-widest px-3 py-2 bg-teal-50 border-b border-teal-100">
-                            {RECEPTION_COLUMN_LABELS[1]} ({protocolSplit.right.length})
-                        </p>
-                        {protocolSplit.right.length === 0 ? (
-                            <p className="p-4 text-[10px] text-slate-400 text-center">No tasks in this column</p>
-                        ) : (
-                            protocolSplit.right.map((t) => <TaskRow key={t.id} task={t} />)
-                        )}
-                    </div>
+                    <ChecklistColumn
+                        title={RECEPTION_COLUMN_LABELS[0]}
+                        rows={receptionRowsCol(0)}
+                        onToggle={(id) => {
+                            const task = taskById.get(id);
+                            if (task) void handleToggleTask(task);
+                        }}
+                        onOpenNote={(id, notes) => {
+                            setActiveCommentId(id);
+                            setCommentDraft(notes);
+                        }}
+                        emptyMessage="No tasks in this column"
+                    />
+                    <ChecklistColumn
+                        title={RECEPTION_COLUMN_LABELS[1]}
+                        rows={receptionRowsCol(1)}
+                        onToggle={(id) => {
+                            const task = taskById.get(id);
+                            if (task) void handleToggleTask(task);
+                        }}
+                        onOpenNote={(id, notes) => {
+                            setActiveCommentId(id);
+                            setCommentDraft(notes);
+                        }}
+                        emptyMessage="No tasks in this column"
+                    />
                 </div>
-                )}
 
-                <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2 mt-8">Dentist checklists</p>
+                <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest pt-2">Dentist checklists</p>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     {(['rick', 'vick'] as const).map((dentistId) => (
-                        <div key={dentistId} className="rounded-lg border border-slate-200 overflow-hidden min-h-[100px]">
-                            <p className="text-[9px] font-black text-slate-700 uppercase tracking-widest px-3 py-2 bg-slate-100 border-b border-slate-200">
-                                {DENTIST_CHECKLIST_LABELS[dentistId]} ({dentistTasksById[dentistId].length})
-                            </p>
-                            {dentistTasksById[dentistId].length === 0 ? (
-                                <p className="p-4 text-[10px] text-slate-400 text-center leading-snug">
-                                    No tasks for today. Admins can add items in the admin portal.
-                                </p>
-                            ) : (
-                                dentistTasksById[dentistId].map((t) => <TaskRow key={t.id} task={t} />)
-                            )}
-                        </div>
+                        <ChecklistColumn
+                            key={dentistId}
+                            title={DENTIST_CHECKLIST_LABELS[dentistId]}
+                            rows={dentistRowsCol(dentistId)}
+                            onToggle={(id) => {
+                                const task = taskById.get(id);
+                                if (task) void handleToggleTask(task);
+                            }}
+                            onOpenNote={(id, notes) => {
+                                setActiveCommentId(id);
+                                setCommentDraft(notes);
+                            }}
+                            emptyMessage="No tasks for this dentist today"
+                        />
                     ))}
                 </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="bg-white border border-amber-200 rounded-lg p-4">
-                    <p className="text-[9px] font-black text-amber-700 uppercase">No appt booked</p>
+                    <p className="text-[9px] font-black text-amber-700 uppercase">No future appointments</p>
                     <p className="text-2xl font-black text-amber-900 mt-1">{openRecallQueue}</p>
-                    <Button variant="outline" size="sm" className="mt-3 h-8 text-[9px] font-bold uppercase w-full" onClick={() => navigateToSection('followups')}>
+                    <p className="text-[10px] text-slate-500 mt-1 leading-snug">Visit queues and no appt booked list</p>
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        className="mt-3 h-8 text-[9px] font-bold uppercase w-full"
+                        onClick={() => navigateToSection('frontDeskQueues', NO_APPT_BOOKED_QUEUE_ID)}
+                    >
                         Open
                     </Button>
                 </div>

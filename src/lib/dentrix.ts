@@ -165,13 +165,12 @@ export const getRiskBadgeClass = (risk: DentrixFollowUpWorkItem['risk']): string
 };
 
 /**
- * Operational lists: exclude non-patient (2) and archived (4).
+ * Operational lists: hide inactive (3) and archived (4) only.
  * Dentrix status: 1=Patient, 2=Non-Patient, 3=Inactive, 4=Archived.
- * Unknown/missing status stays listable for backward compatibility.
+ * Missing status (0) and non-patient (2) remain visible.
  */
 export const isActiveDentrixPatient = (data: { status?: number }): boolean => {
   const s = Number(data.status ?? 0);
-  if (s === 0) return true;
-  if (s === 2 || s === 4) return false;
+  if (s === 3 || s === 4) return false;
   return true;
 };

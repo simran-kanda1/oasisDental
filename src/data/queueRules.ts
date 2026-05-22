@@ -31,6 +31,15 @@ export interface FrontDeskQueueDef {
   description: string;
 }
 
+/** Embedded in No future appointments — missed visits with no next appointment booked. */
+export const NO_APPT_BOOKED_QUEUE_ID = 'no_appt_booked' as const;
+
+export const NO_APPT_BOOKED_QUEUE_DEF: FrontDeskQueueDef = {
+  id: NO_APPT_BOOKED_QUEUE_ID,
+  label: 'No appt booked',
+  description: 'Patients with missed appointment(s) and no next appointment on file — call to rebook.',
+};
+
 export const FRONT_DESK_QUEUE_DEFS: FrontDeskQueueDef[] = [
   {
     id: 'no_shows_past_week',

@@ -5,7 +5,10 @@ export function receptionColumnIndex(taskId: string): 0 | 1 {
   return hash as 0 | 1;
 }
 
-export const RECEPTION_COLUMN_LABELS = ['Reception · Secretary 1', 'Reception · Secretary 2'] as const;
+export const RECEPTION_COLUMN_LABELS = ['Reception 1', 'Reception 2'] as const;
+
+/** Dentist task visible to everyone on the checklist */
+export const DENTIST_ASSIGNMENT_GENERAL = '__general__' as const;
 
 export type DentistChecklistId = 'rick' | 'vick';
 

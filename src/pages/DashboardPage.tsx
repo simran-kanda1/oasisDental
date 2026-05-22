@@ -17,8 +17,10 @@ import {
 import { isRecallFollowUpDoc, isOpenOutreachItem } from '../lib/followUpQueues';
 import { ACTIVITY_SECTION_RECALL_QUEUE, ACTIVITY_SECTION_FOLLOW_UP_OUTREACH } from '../lib/activityLogger';
 import { navigateToSection } from '../lib/navigation';
+import { NO_APPT_BOOKED_QUEUE_ID } from '../data/queueRules';
 import { PatientProfileTrigger } from '../components/PatientProfileTrigger';
 import { isOpenWixInquiryDoc } from '../lib/wixInquiryCounts';
+import { StatGridSkeleton, TableRowsSkeleton } from '../components/ui/skeleton';
 
 const DashboardPage: React.FC = () => {
     const { user } = useAuth();
@@ -237,15 +239,22 @@ const DashboardPage: React.FC = () => {
         setCounts((prev) => ({ ...prev, overdueRecalls: recallDerived.count }));
     }, [recallDerived.count]);
 
-    const stats = [
-        { label: 'Today Appointments', value: counts.appointmentsToday, icon: Calendar, color: 'text-teal-600', border: 'border-teal-200' },
-        { label: 'Week Appointments', value: counts.appointmentsThisWeek, icon: Calendar, color: 'text-blue-600', border: 'border-blue-200' },
-        { label: 'Open Inquiries', value: counts.openInquiries, icon: MessageSquare, color: 'text-indigo-600', border: 'border-indigo-200' },
-        { label: 'No appt booked queue', value: counts.pendingRecallQueue, icon: PhoneCall, color: 'text-amber-600', border: 'border-amber-200' },
-        { label: 'Estimate follow-up', value: counts.pendingOutreachQueue, icon: PhoneCall, color: 'text-orange-600', border: 'border-orange-200' },
-        { label: 'Overdue Recalls', value: counts.overdueRecalls, icon: AlertTriangle, color: 'text-rose-600', border: 'border-rose-200' },
-        { label: 'High-Risk Patients', value: counts.highRiskPatients, icon: AlertTriangle, color: 'text-fuchsia-600', border: 'border-fuchsia-200' },
-        { label: 'Checklist', value: counts.tasksRemaining, icon: ListTodo, color: 'text-slate-600', border: 'border-slate-300' },
+    const stats: Array<{
+        label: string;
+        value: number;
+        icon: typeof Calendar;
+        color: string;
+        border: string;
+        onClick?: () => void;
+    }> = [
+        { label: 'Today Appointments', value: counts.appointmentsToday, icon: Calendar, color: 'text-teal-600', border: 'border-teal-200', onClick: () => navigateToSection('appointments') },
+        { label: 'Week Appointments', value: counts.appointmentsThisWeek, icon: Calendar, color: 'text-blue-600', border: 'border-blue-200', onClick: () => navigateToSection('appointments') },
+        { label: 'Open Inquiries', value: counts.openInquiries, icon: MessageSquare, color: 'text-indigo-600', border: 'border-indigo-200', onClick: () => navigateToSection('inquiries') },
+        { label: 'No future appointments', value: counts.pendingRecallQueue, icon: PhoneCall, color: 'text-amber-600', border: 'border-amber-200', onClick: () => navigateToSection('frontDeskQueues', NO_APPT_BOOKED_QUEUE_ID) },
+        { label: 'Estimate follow-up', value: counts.pendingOutreachQueue, icon: PhoneCall, color: 'text-orange-600', border: 'border-orange-200', onClick: () => navigateToSection('followUpOutreach') },
+        { label: 'Overdue Recalls', value: counts.overdueRecalls, icon: AlertTriangle, color: 'text-rose-600', border: 'border-rose-200', onClick: () => navigateToSection('frontDeskQueues', NO_APPT_BOOKED_QUEUE_ID) },
+        { label: 'High-Risk Patients', value: counts.highRiskPatients, icon: AlertTriangle, color: 'text-fuchsia-600', border: 'border-fuchsia-200', onClick: () => navigateToSection('frontDeskQueues', NO_APPT_BOOKED_QUEUE_ID) },
+        { label: 'Checklist', value: counts.tasksRemaining, icon: ListTodo, color: 'text-slate-600', border: 'border-slate-300', onClick: () => navigateToSection('staffTasks') },
     ];
 
     return (
@@ -261,12 +270,24 @@ const DashboardPage: React.FC = () => {
                 </div>
             </div>
 
-            {/* Stats Grid */}
+            {loading ? (
+                <StatGridSkeleton count={8} />
+            ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
                 {stats.map((stat, i) => {
                     const Icon = stat.icon;
+                    const Wrapper = stat.onClick ? 'button' : 'div';
                     return (
-                        <div key={i} className={cn("bg-white border p-4 rounded-md shadow-sm flex items-center gap-4 transition-all hover:shadow-md", stat.border)}>
+                        <Wrapper
+                            key={i}
+                            type={stat.onClick ? 'button' : undefined}
+                            onClick={stat.onClick}
+                            className={cn(
+                                "bg-white border p-4 rounded-md shadow-sm flex items-center gap-4 transition-all text-left w-full",
+                                stat.border,
+                                stat.onClick && "hover:shadow-md hover:border-teal-300 cursor-pointer"
+                            )}
+                        >
                             <div className={cn("w-10 h-10 rounded bg-slate-50 flex items-center justify-center shrink-0", stat.color)}>
                                 <Icon size={20} />
                             </div>
@@ -274,10 +295,11 @@ const DashboardPage: React.FC = () => {
                                 <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest leading-none mb-1">{stat.label}</p>
                                 <p className="text-2xl font-bold text-slate-900 tabular-nums tracking-tight leading-none">{stat.value}</p>
                             </div>
-                        </div>
+                        </Wrapper>
                     );
                 })}
             </div>
+            )}
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div className="bg-white border border-slate-200 rounded-md p-4">
@@ -389,7 +411,7 @@ const DashboardPage: React.FC = () => {
                     </div>
                     <div className="divide-y divide-slate-100 max-h-[400px] overflow-y-auto scrollbar-none">
                         {loading ? (
-                            <div className="text-center p-12 opacity-30 text-[10px] uppercase font-bold tracking-[0.3em]">Syncing Registry...</div>
+                            <TableRowsSkeleton rows={5} />
                         ) : recentActivity.length === 0 ? (
                             <div className="text-center p-12 opacity-30 text-[10px] uppercase font-bold tracking-widest">No Signals Recorded</div>
                         ) : (
@@ -441,7 +463,7 @@ const DashboardPage: React.FC = () => {
                         <p className="text-sm font-bold text-slate-900 mt-1">{counts.tasksRemaining} items pending</p>
                     </button>
                     <button
-                        onClick={() => navigateToSection('followups')}
+                        onClick={() => navigateToSection('frontDeskQueues', NO_APPT_BOOKED_QUEUE_ID)}
                         className="p-3 rounded border border-amber-200 bg-amber-50 hover:bg-white text-left transition-colors"
                     >
                         <p className="text-[9px] font-bold text-amber-600 uppercase tracking-widest">No appt booked</p>

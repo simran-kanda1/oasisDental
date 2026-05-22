@@ -8,7 +8,7 @@
   "scripts": {
     "build": "tsc",
     "serve": "firebase emulators:start --only functions",
-    "deploy": "firebase deploy --only functions",
+    "deploy": "firebase deploy --only functions:syncWixInquiries,functions:syncWixInquiriesScheduled,functions:createStaffUser",
     "lint": "echo \"No lint configured\""
   },
   "dependencies": {

@@ -51,6 +51,8 @@ export interface WixInquiry {
     /** True when phone matches a Dentrix patient — hidden from inbox and open counts */
     phoneMatchExcluded?: boolean;
     wixContactId?: string;
+    wixSubmissionId?: string;
+    wixFormId?: string;
     lastWixSyncAt?: string;
     wixSourceType?: string;
 }

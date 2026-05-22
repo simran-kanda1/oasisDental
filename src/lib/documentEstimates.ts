@@ -140,3 +140,12 @@ export function buildDocumentEstimateWorkItems(
 export function isDocumentEstimateRelevant(descript: string): boolean {
   return classifyDocumentEstimateStatus(descript) !== 'unclassified';
 }
+
+/** Pre-d approved tab: any document description containing "explanation" (incl. EOB). */
+export function isPredApprovedDocumentStatus(status: DocumentEstimateWorkflowStatus): boolean {
+  return status === 'book_right_away' || status === 'covered_eob';
+}
+
+export function isPredFollowUpDocumentStatus(status: DocumentEstimateWorkflowStatus): boolean {
+  return status === 'needs_follow_up';
+}

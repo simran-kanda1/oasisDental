@@ -51,7 +51,12 @@ interface FollowUpTrackingDoc {
 
 type BookingDraft = { date: string; type: string };
 
-const FollowUpsPage: React.FC = () => {
+export interface FollowUpsPageProps {
+    /** Render inside No future appointments hub (no duplicate page chrome). */
+    embedded?: boolean;
+}
+
+const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
     const { user, userProfile } = useAuth();
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState('');
@@ -305,20 +310,49 @@ const FollowUpsPage: React.FC = () => {
     const selectedForBooking = items.find((x) => x.patientId === bookingId);
 
     return (
-        <div className="p-8 space-y-12 max-w-full mx-auto bg-white font-sans pb-20">
-            <div className="flex flex-col md:flex-row items-center justify-between gap-6 border-b pb-8 border-slate-100 px-2">
+        <div
+            className={
+                embedded
+                    ? 'space-y-8 max-w-full font-sans'
+                    : 'p-8 space-y-12 max-w-full mx-auto bg-white font-sans pb-20'
+            }
+        >
+            <div
+                className={
+                    embedded
+                        ? 'flex flex-col md:flex-row items-center justify-between gap-4 border-b pb-4 border-slate-100'
+                        : 'flex flex-col md:flex-row items-center justify-between gap-6 border-b pb-8 border-slate-100 px-2'
+                }
+            >
                 <div>
-                    <h1 className="text-3xl font-black text-slate-900 tracking-tighter uppercase leading-none">No follow up appt booked</h1>
-                    <p className="text-[10px] font-black text-slate-300 uppercase tracking-[0.2em] mt-2">
-                        {items.length} active patients with missed visits and no next appointment
-                    </p>
+                    {embedded ? (
+                        <>
+                            <p className="text-[9px] font-black text-teal-600 uppercase tracking-widest">No appt booked</p>
+                            <p className="text-[11px] font-bold text-slate-500 mt-1">
+                                {items.length} active patients with missed visits and no next appointment
+                            </p>
+                        </>
+                    ) : (
+                        <>
+                            <h1 className="text-3xl font-black text-slate-900 tracking-tighter uppercase leading-none">
+                                No follow up appt booked
+                            </h1>
+                            <p className="text-[10px] font-black text-slate-300 uppercase tracking-[0.2em] mt-2">
+                                {items.length} active patients with missed visits and no next appointment
+                            </p>
+                        </>
+                    )}
                 </div>
                 <div className="relative w-full md:max-w-xs transition-all">
                     <Input
                         placeholder="Search Patient / ID / Reason..."
                         value={search}
                         onChange={e => setSearch(e.target.value)}
-                        className="pl-6 h-12 bg-slate-50 border-slate-100 rounded-2xl text-[11px] font-black uppercase tracking-tight placeholder:text-slate-200 focus:bg-white focus:ring-teal-500/10 focus:border-teal-500 transition-all shadow-sm"
+                        className={
+                            embedded
+                                ? 'h-10 text-xs font-bold border-slate-200'
+                                : 'pl-6 h-12 bg-slate-50 border-slate-100 rounded-2xl text-[11px] font-black uppercase tracking-tight placeholder:text-slate-200 focus:bg-white focus:ring-teal-500/10 focus:border-teal-500 transition-all shadow-sm'
+                        }
                     />
                 </div>
             </div>

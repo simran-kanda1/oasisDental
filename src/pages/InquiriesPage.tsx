@@ -1,15 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { collection, doc, onSnapshot, orderBy, query, updateDoc } from 'firebase/firestore';
 import { format } from 'date-fns';
-import { Clock, Mail, MessageSquare, Phone, RefreshCw, User } from 'lucide-react';
+import { Clock, Mail, MessageSquare, Phone, User } from 'lucide-react';
 import { db } from '../lib/firebase';
 import type { WixInquiry } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import { logActivity } from '../lib/activityLogger';
+import { logAudit } from '../lib/auditTrail';
+import { CardGridSkeleton, PageHeaderSkeleton } from '../components/ui/skeleton';
 import { cn } from '../lib/utils';
-import { Button } from '../components/ui/button';
-import { syncWixInquiriesAndPhoneFlags } from '../lib/wixInquirySync';
-
 function mapInquiryDoc(id: string, raw: Record<string, unknown>): WixInquiry {
   const statusRaw = String(raw.status ?? 'new').toLowerCase();
   const status: WixInquiry['status'] =
@@ -29,6 +28,8 @@ function mapInquiryDoc(id: string, raw: Record<string, unknown>): WixInquiry {
     assignedTo: raw.assignedTo ? String(raw.assignedTo) : undefined,
     phoneMatchExcluded: raw.phoneMatchExcluded === true,
     wixContactId: raw.wixContactId ? String(raw.wixContactId) : undefined,
+    wixSubmissionId: raw.wixSubmissionId ? String(raw.wixSubmissionId) : undefined,
+    wixFormId: raw.wixFormId ? String(raw.wixFormId) : undefined,
     lastWixSyncAt: raw.lastWixSyncAt ? String(raw.lastWixSyncAt) : undefined,
     wixSourceType: raw.wixSourceType ? String(raw.wixSourceType) : undefined,
   };
@@ -39,8 +40,6 @@ const InquiriesPage: React.FC = () => {
   const [inquiries, setInquiries] = useState<WixInquiry[]>([]);
   const [loading, setLoading] = useState(true);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
-  const [syncing, setSyncing] = useState(false);
-  const [syncMessage, setSyncMessage] = useState<string | null>(null);
 
   useEffect(() => {
     const q = query(collection(db, 'wixInquiries'), orderBy('submittedAt', 'desc'));
@@ -61,6 +60,7 @@ const InquiriesPage: React.FC = () => {
 
   const handleStatusUpdate = async (id: string, newStatus: WixInquiry['status']) => {
     setUpdatingId(id);
+    const prev = inquiries.find((i) => i.id === id)?.status ?? 'new';
     const ref = doc(db, 'wixInquiries', id);
     await updateDoc(ref, {
       status: newStatus,
@@ -73,21 +73,18 @@ const InquiriesPage: React.FC = () => {
       action: `Lead Status: ${newStatus}`,
       section: 'Inquiries',
     });
+    await logAudit({
+      entityType: 'inquiry',
+      entityId: id,
+      action: 'status_change',
+      field: 'status',
+      previousValue: prev,
+      newValue: newStatus,
+      userId: user!.uid,
+      userEmail: user!.email!,
+      userName: userProfile?.displayName ?? user!.email!,
+    });
     setUpdatingId(null);
-  };
-
-  const handlePullFromWix = async () => {
-    setSyncing(true);
-    setSyncMessage(null);
-    try {
-      const r = await syncWixInquiriesAndPhoneFlags();
-      if (r.error) setSyncMessage(r.error);
-      else setSyncMessage(`Synced ${r.leads} lead(s) from Wix.`);
-    } catch (e) {
-      setSyncMessage(e instanceof Error ? e.message : 'Sync failed');
-    } finally {
-      setSyncing(false);
-    }
   };
 
   return (
@@ -100,40 +97,26 @@ const InquiriesPage: React.FC = () => {
           <div>
             <h1 className="text-xl font-bold text-slate-900 tracking-tight">Patient Inquiries</h1>
             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">
-              Wix CRM via Firebase Function - existing patient phone matches hidden
+              Website forms — auto-syncs from Wix every 5 minutes; existing patient phones hidden
             </p>
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="bg-teal-50 px-3 py-1.5 rounded border border-teal-100 text-[10px] font-bold text-teal-600 uppercase tracking-tight">
-            {activeLeadCount} Active Leads
-          </div>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-8 text-[10px] font-bold uppercase gap-1.5"
-            disabled={syncing}
-            onClick={() => void handlePullFromWix()}
-          >
-            <RefreshCw className={cn('h-3.5 w-3.5', syncing && 'animate-spin')} />
-            Pull from Wix
-          </Button>
+        <div className="bg-teal-50 px-3 py-1.5 rounded border border-teal-100 text-[10px] font-bold text-teal-600 uppercase tracking-tight">
+          {activeLeadCount} Active Leads
         </div>
       </div>
 
-      {syncMessage && <div className="rounded-md border border-slate-200 bg-white px-4 py-2 text-xs text-slate-700">{syncMessage}</div>}
-
       {loading ? (
-        <div className="p-20 text-center uppercase text-[10px] font-bold opacity-30 tracking-[0.3em] bg-white rounded-md border border-slate-200">
-          Syncing Registry...
+        <div className="space-y-4">
+          <PageHeaderSkeleton />
+          <CardGridSkeleton count={6} />
         </div>
       ) : visibleInquiries.length === 0 ? (
         <div className="p-16 text-center bg-white rounded-md border border-slate-200 text-sm text-slate-500">
           {inquiries.length > 0
             ? 'All current inquiries match existing patient phone numbers, or none are open.'
-            : 'No inquiries yet. Click Pull from Wix to sync from production source.'}
+            : 'No inquiries yet. New website submissions appear here automatically (synced every 5 minutes).'}
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">

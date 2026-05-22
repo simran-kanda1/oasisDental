@@ -13,10 +13,13 @@ import { db } from '../lib/firebase';
 import { cn } from '../lib/utils';
 import {
   FRONT_DESK_QUEUE_DEFS,
+  NO_APPT_BOOKED_QUEUE_DEF,
+  NO_APPT_BOOKED_QUEUE_ID,
   buildQueueRows,
   type AgeBucketFilter,
   type VisitWeekBucketFilter,
 } from '../data/queueRules';
+import FollowUpsPage from './FollowUpsPage';
 import type { DentrixAppointmentDoc, DentrixPatientDoc } from '../lib/dentrix';
 import { PatientProfileTrigger } from '../components/PatientProfileTrigger';
 import { QUEUE_ROW_TRACKING_COLLECTION, queueTrackingDocId } from '../lib/queueRowTracking';
@@ -56,8 +59,17 @@ const USE_WEEK_FILTER = new Set(['emerg_follow_up', 'new_patient_follow_up']);
 
 type ReferralProgressFilter = 'all' | 'needs_update';
 
-const FrontDeskQueuesPage: React.FC = () => {
-  const [activeId, setActiveId] = useState(FRONT_DESK_QUEUE_DEFS[0].id);
+export interface FrontDeskQueuesPageProps {
+  /** Opens a specific queue (e.g. no appt booked when arriving from legacy nav). */
+  initialQueueId?: string;
+}
+
+const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueId }) => {
+  const [activeId, setActiveId] = useState(initialQueueId ?? FRONT_DESK_QUEUE_DEFS[0].id);
+
+  useEffect(() => {
+    if (initialQueueId) setActiveId(initialQueueId);
+  }, [initialQueueId]);
   const [ageBucket, setAgeBucket] = useState<AgeBucketFilter>('all');
   const [visitWeekBucket, setVisitWeekBucket] = useState<VisitWeekBucketFilter>('all');
   const [referralProgressFilter, setReferralProgressFilter] = useState<ReferralProgressFilter>('needs_update');
@@ -151,7 +163,7 @@ const FrontDeskQueuesPage: React.FC = () => {
   }, []);
 
   const queueRows = useMemo(() => {
-    if (activeId === REFERRAL_DOCTOR_QUEUE_ID) return [];
+    if (activeId === REFERRAL_DOCTOR_QUEUE_ID || activeId === NO_APPT_BOOKED_QUEUE_ID) return [];
     return buildQueueRows(
       activeId,
       appointments,
@@ -181,9 +193,16 @@ const FrontDeskQueuesPage: React.FC = () => {
     });
   }, [referralRows, referralProgressByDocId, referralProgressFilter]);
 
-  const activeDef = FRONT_DESK_QUEUE_DEFS.find((d) => d.id === activeId);
+  const activeDef =
+    activeId === NO_APPT_BOOKED_QUEUE_ID
+      ? NO_APPT_BOOKED_QUEUE_DEF
+      : FRONT_DESK_QUEUE_DEFS.find((d) => d.id === activeId);
+  const isNoApptBookedQueue = activeId === NO_APPT_BOOKED_QUEUE_ID;
   const showAgeFilter =
-    activeId !== 'no_shows_past_week' && !USE_WEEK_FILTER.has(activeId) && activeId !== REFERRAL_DOCTOR_QUEUE_ID;
+    !isNoApptBookedQueue &&
+    activeId !== 'no_shows_past_week' &&
+    !USE_WEEK_FILTER.has(activeId) &&
+    activeId !== REFERRAL_DOCTOR_QUEUE_ID;
   const showWeekFilter = USE_WEEK_FILTER.has(activeId);
   const isReferralQueue = activeId === REFERRAL_DOCTOR_QUEUE_ID;
 
@@ -227,7 +246,7 @@ const FrontDeskQueuesPage: React.FC = () => {
 
   const reasonDisabled = (rebooked: boolean | undefined) => activeId === 'no_shows_past_week' && rebooked === true;
 
-  const showMainLoader = isReferralQueue ? !referralsReady : loading;
+  const showMainLoader = isNoApptBookedQueue ? false : isReferralQueue ? !referralsReady : loading;
 
   if (!activeDef) {
     return null;
@@ -236,8 +255,20 @@ const FrontDeskQueuesPage: React.FC = () => {
   return (
     <div className="flex flex-col md:flex-row min-h-[calc(100vh-3rem)] bg-slate-50/80 font-sans">
       <aside className="w-full md:w-56 shrink-0 border-b md:border-b-0 md:border-r border-slate-200 bg-white p-3 overflow-y-auto max-h-[36vh] md:max-h-none">
-        <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest px-2 mb-2">Queues</p>
+        <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest px-2 mb-2">No future appointments</p>
         <nav className="space-y-0.5">
+          <button
+            type="button"
+            onClick={() => setActiveId(NO_APPT_BOOKED_QUEUE_ID)}
+            className={cn(
+              'w-full text-left px-3 py-2 rounded-lg text-[10px] font-bold uppercase tracking-tight transition-colors',
+              activeId === NO_APPT_BOOKED_QUEUE_ID
+                ? 'bg-teal-50 text-teal-800 border border-teal-100'
+                : 'text-slate-600 hover:bg-slate-50 border border-transparent'
+            )}
+          >
+            {NO_APPT_BOOKED_QUEUE_DEF.label}
+          </button>
           {FRONT_DESK_QUEUE_DEFS.map((q) => (
             <button
               key={q.id}
@@ -254,6 +285,10 @@ const FrontDeskQueuesPage: React.FC = () => {
         </nav>
       </aside>
       <main className="flex-1 p-4 md:p-6 overflow-auto">
+        {isNoApptBookedQueue ? (
+          <FollowUpsPage embedded />
+        ) : (
+        <>
         <div className="mb-4 flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
           <div>
             <h1 className="text-xl font-black text-slate-900 uppercase tracking-tight">{activeDef.label}</h1>
@@ -551,6 +586,8 @@ const FrontDeskQueuesPage: React.FC = () => {
               </tbody>
             </table>
           </div>
+        )}
+        </>
         )}
       </main>
     </div>
