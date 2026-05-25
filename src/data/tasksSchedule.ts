@@ -6,6 +6,8 @@ export interface RecurringTask {
     week: number; // 1 to 4
     /** Optional checklist grouping; derived from title when missing */
     taskGroup?: string;
+    /** Where staff go when they open this protocol from the checklist */
+    linkPresetId?: string;
 }
 
 export const RECURRING_TASKS: RecurringTask[] = [

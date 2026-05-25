@@ -1,6 +1,6 @@
 import React from 'react';
 import { format } from 'date-fns';
-import { MessageSquare } from 'lucide-react';
+import { ChevronRight, MessageSquare } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import type { ChecklistTaskRow } from './ChecklistBoard';
 
@@ -9,6 +9,7 @@ interface ChecklistColumnProps {
   rows: ChecklistTaskRow[];
   onToggle: (id: string) => void;
   onOpenNote: (id: string, notes: string) => void;
+  onOpenTask?: (row: ChecklistTaskRow) => void;
   emptyMessage?: string;
 }
 
@@ -17,6 +18,7 @@ export const ChecklistColumn: React.FC<ChecklistColumnProps> = ({
   rows,
   onToggle,
   onOpenNote,
+  onOpenTask,
   emptyMessage = 'No tasks',
 }) => {
   return (
@@ -50,9 +52,23 @@ export const ChecklistColumn: React.FC<ChecklistColumnProps> = ({
                   {done && <div className="w-1.5 h-1.5 bg-white rounded-sm" />}
                 </button>
                 <div className="flex-1 min-w-0">
-                  <p className={cn('text-[12px] font-medium text-slate-800 leading-snug', done && 'line-through text-slate-500')}>
-                    {task.title}
-                  </p>
+                  {onOpenTask && task.linkTargets && task.linkTargets.length > 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => onOpenTask(task)}
+                      className={cn(
+                        'text-left w-full text-[12px] font-medium leading-snug group/link flex items-start gap-1',
+                        done ? 'line-through text-slate-500' : 'text-teal-800 hover:text-teal-600'
+                      )}
+                    >
+                      <span className="flex-1">{task.title}</span>
+                      <ChevronRight className="w-3.5 h-3.5 shrink-0 mt-0.5 opacity-50 group-hover/link:opacity-100" />
+                    </button>
+                  ) : (
+                    <p className={cn('text-[12px] font-medium text-slate-800 leading-snug', done && 'line-through text-slate-500')}>
+                      {task.title}
+                    </p>
+                  )}
                   {task.assigneeLabel && (
                     <p className="text-[9px] font-bold text-slate-500 uppercase mt-0.5">{task.assigneeLabel}</p>
                   )}

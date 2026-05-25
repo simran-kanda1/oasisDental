@@ -1,4 +1,35 @@
-import { cleanDentrixText, formatDentrixDateKey, formatPatientFullName, type DentrixPatientDoc } from './dentrix';
+import { cleanDentrixText, formatDentrixDateKey, formatPatientFullName, parseDentrixDate, type DentrixPatientDoc } from './dentrix';
+
+/** How far back to load Document Center rows for the estimates page. */
+export type EstimateDocumentLookback = '1' | '3' | '6' | '9' | 'all';
+
+export const ESTIMATE_DOCUMENT_LOOKBACK_OPTIONS: { id: EstimateDocumentLookback; label: string }[] = [
+  { id: '1', label: 'Up to 1 month' },
+  { id: '3', label: 'Up to 3 months' },
+  { id: '6', label: 'Up to 6 months' },
+  { id: '9', label: 'Up to 9 months' },
+  { id: 'all', label: 'All' },
+];
+
+export const DEFAULT_ESTIMATE_DOCUMENT_LOOKBACK: EstimateDocumentLookback = '1';
+
+export function estimateDocumentSince(lookback: EstimateDocumentLookback): Date | null {
+  if (lookback === 'all') return null;
+  const months = Number(lookback);
+  if (!Number.isFinite(months) || months <= 0) return null;
+  const since = new Date();
+  since.setMonth(since.getMonth() - months);
+  since.setHours(0, 0, 0, 0);
+  return since;
+}
+
+export function isDocumentWithinLookback(createdate: unknown, lookback: EstimateDocumentLookback): boolean {
+  const since = estimateDocumentSince(lookback);
+  if (!since) return true;
+  const docDate = parseDentrixDate(createdate);
+  if (!docDate) return false;
+  return docDate >= since;
+}
 
 /** Dentrix v_docattach — attachtotype 1 = patient */
 export const DOCUMENT_ATTACH_TO_PATIENT = 1;
@@ -32,8 +63,10 @@ export interface DocumentEstimateWorkItem {
   docFirestoreId: string;
   docId: number;
   patientId: string;
+  patientGuid: string | null;
   patientName: string;
   descript: string;
+  createdate?: string;
   createdLabel: string | null;
   workflowStatus: DocumentEstimateWorkflowStatus;
   followUpDocId: string;
@@ -99,14 +132,16 @@ export function buildDocumentEstimateWorkItems(
   documents: DentrixDocumentDoc[],
   docIdToPatientId: Map<number, string>,
   patientsById: Record<string, DentrixPatientDoc>,
-  options?: { includeUnclassified?: boolean }
+  options?: { includeUnclassified?: boolean; lookback?: EstimateDocumentLookback }
 ): DocumentEstimateWorkItem[] {
   const includeUnclassified = options?.includeUnclassified ?? false;
+  const lookback = options?.lookback ?? DEFAULT_ESTIMATE_DOCUMENT_LOOKBACK;
   const rows: DocumentEstimateWorkItem[] = [];
 
   for (const doc of documents) {
     const docId = Number(doc.docid ?? doc.id);
     if (!Number.isFinite(docId) || docId <= 0) continue;
+    if (!isDocumentWithinLookback(doc.createdate, lookback)) continue;
 
     const descript = cleanDentrixText(doc.descript) || '';
     const workflowStatus = classifyDocumentEstimateStatus(descript);
@@ -120,13 +155,16 @@ export function buildDocumentEstimateWorkItems(
       patient
         ? formatPatientFullName(patient.first_name, patient.last_name) || `Patient #${patientId}`
         : `Patient #${patientId}`;
+    const patientGuid = patient?.patient_guid ? cleanDentrixText(patient.patient_guid) : null;
 
     rows.push({
       docFirestoreId: doc.id,
       docId,
       patientId,
+      patientGuid: patientGuid || null,
       patientName: cleanDentrixText(patientName) || `Patient #${patientId}`,
       descript: descript || '—',
+      createdate: typeof doc.createdate === 'string' ? doc.createdate : undefined,
       createdLabel: formatDentrixDateKey(doc.createdate),
       workflowStatus,
       followUpDocId: documentFollowUpDocId(docId),

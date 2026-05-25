@@ -44,6 +44,14 @@ import {
     type DentistChecklistId,
 } from '../lib/staffChecklist';
 import { ChecklistColumn } from '../components/checklist/ChecklistColumn';
+import { TaskLinkPicker } from '../components/checklist/TaskLinkPicker';
+import {
+    applyTaskLinkTarget,
+    inferTaskLinkPresetId,
+    linkTargetsForFirestore,
+    resolveTaskLinkConfig,
+    type TaskLinkTarget,
+} from '../lib/taskLinks';
 
 interface Task {
     id: string;
@@ -58,6 +66,8 @@ interface Task {
     assignmentScope?: 'general' | 'user';
     taskId?: string;
     taskGroup?: TaskGroupId;
+    linkPresetId?: string;
+    linkTargets?: TaskLinkTarget[];
     notes?: string;
     lastCommentBy?: string;
     lastCommentAt?: unknown;
@@ -102,6 +112,13 @@ const StaffTasksPage: React.FC = () => {
     const [openInquiries, setOpenInquiries] = useState(0);
     const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
     const [commentDraft, setCommentDraft] = useState('');
+    const [linkPicker, setLinkPicker] = useState<{ title: string; targets: TaskLinkTarget[] } | null>(null);
+
+    const scheduleByTemplateId = useMemo(() => {
+        const map = new Map<string, RecurringTask>();
+        recurringSchedule.forEach((t) => map.set(t.id, t));
+        return map;
+    }, [recurringSchedule]);
 
     useEffect(() => {
         if (!activeCommentId) return;
@@ -191,6 +208,10 @@ const StaffTasksPage: React.FC = () => {
                     const taskGroup = (TASK_GROUP_ORDER as readonly string[]).includes(rawGroup)
                         ? (rawGroup as TaskGroupId)
                         : deriveTaskGroupFromTitle(title);
+                    const scheduleTpl = scheduleByTemplateId.get(d.id);
+                    const linkFields = linkTargetsForFirestore(
+                        scheduleTpl?.linkPresetId ?? inferTaskLinkPresetId(title)
+                    );
                     await setDoc(taskRef, {
                         title,
                         type: 'protocol',
@@ -199,6 +220,7 @@ const StaffTasksPage: React.FC = () => {
                         date: selectedDateStr,
                         taskId: d.id,
                         taskGroup,
+                        ...linkFields,
                         createdAt: serverTimestamp(),
                     });
                 }
@@ -211,7 +233,7 @@ const StaffTasksPage: React.FC = () => {
             unsubDentist();
             unsubSched();
         };
-    }, [selectedDate, selectedDateStr, user?.email]);
+    }, [selectedDate, selectedDateStr, user?.email, scheduleByTemplateId]);
 
     useEffect(() => {
         const unsubFollowups = onSnapshot(query(collection(db, 'followUps'), where('nextAppointmentBooked', '==', false)), (snap) => {
@@ -316,18 +338,39 @@ const StaffTasksPage: React.FC = () => {
         return monthTasksByDate.get(dateStr)?.find((t) => t.taskId === templateId);
     };
 
-    const toRow = (t: Task, extra: Partial<ChecklistTaskRow>): ChecklistTaskRow => ({
-        id: t.id,
-        title: t.title,
-        status: t.status,
-        priority: t.priority,
-        taskGroup: (t.taskGroup as TaskGroupId) || deriveTaskGroupFromTitle(t.title),
-        notes: t.notes,
-        completedAt: t.completedAt,
-        completedByName: t.completedByName,
-        section: 'assigned',
-        ...extra,
-    });
+    const linkConfigForTask = (t: Task) =>
+        resolveTaskLinkConfig({
+            title: t.title,
+            taskId: t.taskId,
+            linkPresetId: t.linkPresetId ?? scheduleByTemplateId.get(t.taskId ?? '')?.linkPresetId,
+            linkTargets: t.linkTargets,
+        });
+
+    const handleOpenTask = (row: ChecklistTaskRow) => {
+        if (!row.linkTargets?.length) return;
+        if (row.linkTargets.length === 1) {
+            applyTaskLinkTarget(row.linkTargets[0]);
+            return;
+        }
+        setLinkPicker({ title: row.title, targets: row.linkTargets });
+    };
+
+    const toRow = (t: Task, extra: Partial<ChecklistTaskRow>): ChecklistTaskRow => {
+        const link = linkConfigForTask(t);
+        return {
+            id: t.id,
+            title: t.title,
+            status: t.status,
+            priority: t.priority,
+            taskGroup: (t.taskGroup as TaskGroupId) || deriveTaskGroupFromTitle(t.title),
+            notes: t.notes,
+            completedAt: t.completedAt,
+            completedByName: t.completedByName,
+            section: 'assigned',
+            linkTargets: link.targets.length ? link.targets : undefined,
+            ...extra,
+        };
+    };
 
     const assignedRows = useMemo((): ChecklistTaskRow[] => {
         const rows: ChecklistTaskRow[] = directives.map((t) =>
@@ -407,6 +450,12 @@ const StaffTasksPage: React.FC = () => {
                                 t?.completedAt && typeof t.completedAt.toDate === 'function'
                                     ? format(t.completedAt.toDate(), 'h:mm a')
                                     : null;
+                            const tplLink = resolveTaskLinkConfig({
+                                title: tpl.title,
+                                taskId: tpl.id,
+                                linkPresetId: tpl.linkPresetId,
+                            });
+                            const canOpen = tplLink.targets.length > 0;
                             return (
                                 <div
                                     key={tpl.id}
@@ -415,7 +464,27 @@ const StaffTasksPage: React.FC = () => {
                                         done && 'bg-slate-50 text-slate-500 line-through'
                                     )}
                                 >
-                                    {tpl.title}
+                                    {canOpen ? (
+                                        <button
+                                            type="button"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                if (tplLink.targets.length === 1) {
+                                                    applyTaskLinkTarget(tplLink.targets[0]);
+                                                } else {
+                                                    setLinkPicker({ title: tpl.title, targets: tplLink.targets });
+                                                }
+                                            }}
+                                            className={cn(
+                                                'text-left w-full hover:text-teal-700',
+                                                done && 'line-through'
+                                            )}
+                                        >
+                                            {tpl.title}
+                                        </button>
+                                    ) : (
+                                        tpl.title
+                                    )}
                                     {done && (
                                         <span className="block text-[9px] text-slate-400 not-italic no-underline mt-0.5 normal-case">
                                             {completedAt}
@@ -479,7 +548,8 @@ const StaffTasksPage: React.FC = () => {
                         <p className="text-xs font-black text-teal-900 uppercase tracking-tight">Daily rhythm</p>
                         <ol className="mt-2 space-y-1.5 text-[11px] text-slate-700 list-decimal list-inside leading-snug max-w-xl">
                             <li>Pick today on the week strip (amber outline = today).</li>
-                            <li>Check off every protocol for that day; add a note on the speech icon if something is blocked.</li>
+                            <li>Tap a task title (teal) to open the linked queue or page; check off when done.</li>
+                            <li>Add a note on the speech icon if something is blocked.</li>
                             <li>Work assigned-to-you items at the top first.</li>
                             <li>Use the counters below to jump to no future appointments, estimates, or inquiries.</li>
                         </ol>
@@ -529,6 +599,7 @@ const StaffTasksPage: React.FC = () => {
                         setActiveCommentId(id);
                         setCommentDraft(notes);
                     }}
+                    onOpenTask={handleOpenTask}
                     emptyMessage="Nothing assigned to you for this day."
                 />
 
@@ -547,6 +618,7 @@ const StaffTasksPage: React.FC = () => {
                             setActiveCommentId(id);
                             setCommentDraft(notes);
                         }}
+                        onOpenTask={handleOpenTask}
                         emptyMessage="No tasks in this column"
                     />
                     <ChecklistColumn
@@ -560,6 +632,7 @@ const StaffTasksPage: React.FC = () => {
                             setActiveCommentId(id);
                             setCommentDraft(notes);
                         }}
+                        onOpenTask={handleOpenTask}
                         emptyMessage="No tasks in this column"
                     />
                 </div>
@@ -579,11 +652,19 @@ const StaffTasksPage: React.FC = () => {
                                 setActiveCommentId(id);
                                 setCommentDraft(notes);
                             }}
+                            onOpenTask={handleOpenTask}
                             emptyMessage="No tasks for this dentist today"
                         />
                     ))}
                 </div>
             </div>
+
+            <TaskLinkPicker
+                open={!!linkPicker}
+                taskTitle={linkPicker?.title ?? ''}
+                targets={linkPicker?.targets ?? []}
+                onClose={() => setLinkPicker(null)}
+            />
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="bg-white border border-amber-200 rounded-lg p-4">

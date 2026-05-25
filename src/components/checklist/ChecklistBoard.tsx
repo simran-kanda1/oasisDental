@@ -5,6 +5,7 @@ import { cn } from '../../lib/utils';
 import { Badge } from '../ui/badge';
 import { TASK_GROUP_LABELS, type TaskGroupId } from '../../lib/taskGroups';
 import { RECEPTION_COLUMN_LABELS } from '../../lib/staffChecklist';
+import type { TaskLinkTarget } from '../../lib/taskLinks';
 
 export interface ChecklistTaskRow {
   id: string;
@@ -19,6 +20,7 @@ export interface ChecklistTaskRow {
   columnLabel?: string;
   dentistLabel?: string;
   assigneeLabel?: string;
+  linkTargets?: TaskLinkTarget[];
 }
 
 interface ChecklistBoardProps {

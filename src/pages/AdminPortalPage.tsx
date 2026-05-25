@@ -10,6 +10,7 @@ import { isActiveDentrixPatient } from '../lib/dentrix';
 import { isRecallFollowUpDoc, isOpenOutreachItem } from '../lib/followUpQueues';
 import { isOpenWixInquiryDoc } from '../lib/wixInquiryCounts';
 import { deriveTaskGroupFromTitle } from '../lib/taskGroups';
+import { inferTaskLinkPresetId, linkTargetsForFirestore, presetOptionsForSelect } from '../lib/taskLinks';
 import { logAudit } from '../lib/auditTrail';
 import { createStaffUser } from '../lib/createStaffUser';
 import {
@@ -44,6 +45,7 @@ interface Task {
     completedByName?: string;
     createdAt?: any;
     taskId?: string;
+    linkPresetId?: string;
     notes?: string;
 }
 
@@ -118,7 +120,8 @@ const AdminPortalPage: React.FC = () => {
     const [showAddRecurring, setShowAddRecurring] = useState(false);
     const [loading, setLoading] = useState(true);
     const [activeWeek, setActiveWeek] = useState(1);
-    const [newRecurring, setNewRecurring] = useState({ title: '', week: 1, day: 1 });
+    const [newRecurring, setNewRecurring] = useState({ title: '', week: 1, day: 1, linkPresetId: 'none' });
+    const linkPresetOptions = presetOptionsForSelect();
     const [opsStats, setOpsStats] = useState({
         appointments: 0,
         patients: 0,
@@ -174,12 +177,22 @@ const AdminPortalPage: React.FC = () => {
         return unsub;
     }, []);
 
-    const handleAddTask = async (t: any) => {
+    const handleAddTask = async (t: {
+        title: string;
+        assignedTo: string;
+        priority: Task['priority'];
+        linkPresetId?: string;
+    }) => {
         const assignee = users.find(u => u.email === t.assignedTo);
+        const presetId = t.linkPresetId && t.linkPresetId !== 'none' ? t.linkPresetId : inferTaskLinkPresetId(t.title);
+        const linkFields = linkTargetsForFirestore(presetId);
         const ref = await addDoc(collection(db, 'tasks'), {
-            ...t,
+            title: t.title,
             type: 'directive',
             status: 'pending',
+            priority: t.priority,
+            assignedTo: t.assignedTo,
+            ...linkFields,
             assignedToName: assignee?.displayName || t.assignedTo.split('@')[0],
             assignedBy: user?.email,
             assignedByName: userProfile?.displayName || user?.email,
@@ -232,12 +245,20 @@ const AdminPortalPage: React.FC = () => {
     const handleAddRecurring = async (e: React.FormEvent) => {
         e.preventDefault();
         const id = `rec-${Date.now()}`;
+        const presetId =
+            newRecurring.linkPresetId && newRecurring.linkPresetId !== 'none'
+                ? newRecurring.linkPresetId
+                : inferTaskLinkPresetId(newRecurring.title);
+        const linkFields = linkTargetsForFirestore(presetId);
         await setDoc(doc(db, 'recurringTaskSchedule', id), {
             id,
-            ...newRecurring,
+            title: newRecurring.title,
+            week: newRecurring.week,
+            day: newRecurring.day,
             taskGroup: deriveTaskGroupFromTitle(newRecurring.title),
+            ...linkFields,
         });
-        setNewRecurring({ title: '', week: 1, day: 1 });
+        setNewRecurring({ title: '', week: 1, day: 1, linkPresetId: 'none' });
         setShowAddRecurring(false);
     };
 
@@ -511,6 +532,21 @@ const AdminPortalPage: React.FC = () => {
                                         </select>
                                     </div>
                                 </div>
+                                <div className="space-y-2">
+                                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1 opacity-60">Opens in app</label>
+                                    <select
+                                        value={newRecurring.linkPresetId}
+                                        onChange={(e) => setNewRecurring({ ...newRecurring, linkPresetId: e.target.value })}
+                                        className="w-full h-12 border border-slate-100 bg-slate-50/50 rounded-2xl text-[11px] font-bold px-4 focus:bg-white focus:border-teal-300 transition-all outline-none"
+                                    >
+                                        {linkPresetOptions.map((o) => (
+                                            <option key={o.id} value={o.id}>
+                                                {o.label}
+                                            </option>
+                                        ))}
+                                    </select>
+                                    <p className="text-[10px] text-slate-400 ml-1">Staff tap the task on the checklist to jump here. Auto-guessed from title if set to No link.</p>
+                                </div>
                                 <div className="flex gap-4 pt-4 border-t border-slate-50">
                                     <Button type="submit" className="flex-1 bg-teal-600 text-white font-black h-12 rounded-2xl shadow-xl shadow-teal-500/10 text-[11px] uppercase tracking-widest active:scale-[0.98] transition-all">Submit Node</Button>
                                     <Button variant="ghost" onClick={() => setShowAddRecurring(false)} className="px-8 h-12 text-slate-400 font-black uppercase text-[10px] tracking-widest rounded-2xl">Cancel</Button>
@@ -559,11 +595,19 @@ const AdminPortalPage: React.FC = () => {
                                                 title: formData.get('title') as string,
                                                 assignedTo: formData.get('assignedTo') as string,
                                                 priority: formData.get('priority') as Task['priority'],
+                                                linkPresetId: formData.get('linkPresetId') as string,
                                             });
                                         }}
                                         className="space-y-3"
                                     >
                                         <Input name="title" placeholder="Task title…" required className="h-9 text-sm" />
+                                        <select name="linkPresetId" className="h-9 border border-slate-200 rounded-md text-xs px-2 w-full" defaultValue="none">
+                                            {linkPresetOptions.map((o) => (
+                                                <option key={o.id} value={o.id}>
+                                                    {o.label}
+                                                </option>
+                                            ))}
+                                        </select>
                                         <div className="grid grid-cols-2 gap-3">
                                             <select name="assignedTo" className="h-9 border border-slate-200 rounded-md text-xs px-2">
                                                 {users.map((u) => (
