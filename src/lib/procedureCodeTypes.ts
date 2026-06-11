@@ -417,6 +417,7 @@ export function buildDocumentProcedureContext(options: {
     descript: options.descript,
     claimsForPatient,
     idCandidates,
+    hintCodes: [...fromText, ...fromLog],
   });
 
   if (matchedClaim) {

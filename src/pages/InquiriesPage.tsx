@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { collection, doc, onSnapshot, orderBy, query, updateDoc } from 'firebase/firestore';
+import { collection, doc, onSnapshot, updateDoc } from 'firebase/firestore';
 import { format } from 'date-fns';
 import { Clock, Mail, MessageSquare, Phone, User } from 'lucide-react';
 import { db } from '../lib/firebase';
@@ -40,23 +40,36 @@ const InquiriesPage: React.FC = () => {
   const [inquiries, setInquiries] = useState<WixInquiry[]>([]);
   const [loading, setLoading] = useState(true);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [showExistingPatients, setShowExistingPatients] = useState(false);
 
   useEffect(() => {
-    const q = query(collection(db, 'wixInquiries'), orderBy('submittedAt', 'desc'));
     const unsub = onSnapshot(
-      q,
+      collection(db, 'wixInquiries'),
       (snap) => {
-        const data = snap.docs.map((d) => mapInquiryDoc(d.id, d.data() as Record<string, unknown>));
+        const data = snap.docs
+          .map((d) => mapInquiryDoc(d.id, d.data() as Record<string, unknown>))
+          .sort((a, b) => b.submittedAt.localeCompare(a.submittedAt));
         setInquiries(data);
         setLoading(false);
       },
-      () => setLoading(false)
+      (err) => {
+        console.error('wixInquiries listener failed', err);
+        setLoading(false);
+      }
     );
     return unsub;
   }, []);
 
-  const visibleInquiries = useMemo(() => inquiries.filter((i) => !i.phoneMatchExcluded), [inquiries]);
-  const activeLeadCount = useMemo(() => visibleInquiries.filter((i) => i.status !== 'converted').length, [visibleInquiries]);
+  const newLeadInquiries = useMemo(() => inquiries.filter((i) => !i.phoneMatchExcluded), [inquiries]);
+  const hiddenInquiries = useMemo(() => inquiries.filter((i) => i.phoneMatchExcluded), [inquiries]);
+  const visibleInquiries = useMemo(
+    () => (showExistingPatients ? inquiries : newLeadInquiries),
+    [inquiries, newLeadInquiries, showExistingPatients]
+  );
+  const activeLeadCount = useMemo(
+    () => newLeadInquiries.filter((i) => i.status !== 'converted').length,
+    [newLeadInquiries]
+  );
 
   const handleStatusUpdate = async (id: string, newStatus: WixInquiry['status']) => {
     setUpdatingId(id);
@@ -97,15 +110,34 @@ const InquiriesPage: React.FC = () => {
           <div>
             <h1 className="text-xl font-bold text-slate-900 tracking-tight">Patient Inquiries</h1>
             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">
-              Website forms — auto-syncs from Wix every 5 minutes; existing patient phones hidden
+              New website leads only — hidden if phone matches an existing patient file (not whether they booked)
             </p>
           </div>
         </div>
 
-        <div className="bg-teal-50 px-3 py-1.5 rounded border border-teal-100 text-[10px] font-bold text-teal-600 uppercase tracking-tight">
-          {activeLeadCount} Active Leads
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="bg-teal-50 px-3 py-1.5 rounded border border-teal-100 text-[10px] font-bold text-teal-600 uppercase tracking-tight">
+            {activeLeadCount} new lead{activeLeadCount === 1 ? '' : 's'}
+          </div>
+          {hiddenInquiries.length > 0 && (
+            <div className="bg-slate-100 px-3 py-1.5 rounded border border-slate-200 text-[10px] font-bold text-slate-500 uppercase tracking-tight">
+              {hiddenInquiries.length} existing patient{hiddenInquiries.length === 1 ? '' : 's'}
+            </div>
+          )}
         </div>
       </div>
+
+      {hiddenInquiries.length > 0 && (
+        <label className="flex items-center gap-2 px-1 text-[11px] font-medium text-slate-600 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={showExistingPatients}
+            onChange={(e) => setShowExistingPatients(e.target.checked)}
+            className="rounded border-slate-300"
+          />
+          Show inquiries from existing patients ({hiddenInquiries.length} hidden by phone match)
+        </label>
+      )}
 
       {loading ? (
         <div className="space-y-4">
@@ -115,7 +147,9 @@ const InquiriesPage: React.FC = () => {
       ) : visibleInquiries.length === 0 ? (
         <div className="p-16 text-center bg-white rounded-md border border-slate-200 text-sm text-slate-500">
           {inquiries.length > 0
-            ? 'All current inquiries match existing patient phone numbers, or none are open.'
+            ? hiddenInquiries.length > 0 && !showExistingPatients
+              ? `${hiddenInquiries.length} recent inquir${hiddenInquiries.length === 1 ? 'y is' : 'ies are'} from phones already on file — enable “existing patients” above to review. This is not based on whether they already booked an appointment.`
+              : 'No open inquiries to show.'
             : 'No inquiries yet. New website submissions appear here automatically (synced every 5 minutes).'}
         </div>
       ) : (
@@ -136,8 +170,15 @@ const InquiriesPage: React.FC = () => {
                     </div>
                     <h3 className="text-sm font-bold text-slate-900 tracking-tight truncate">{inquiry.name}</h3>
                   </div>
-                  <span className="text-[8px] font-bold px-1.5 py-0.5 rounded-sm bg-slate-100 text-slate-400 uppercase tracking-widest border border-slate-200 group-hover:bg-teal-50 group-hover:text-teal-600 group-hover:border-teal-100 shrink-0">
-                    Wix
+                  <span
+                    className={cn(
+                      'text-[8px] font-bold px-1.5 py-0.5 rounded-sm uppercase tracking-widest border shrink-0',
+                      inquiry.phoneMatchExcluded
+                        ? 'bg-slate-200 text-slate-600 border-slate-300'
+                        : 'bg-slate-100 text-slate-400 border-slate-200 group-hover:bg-teal-50 group-hover:text-teal-600 group-hover:border-teal-100'
+                    )}
+                  >
+                    {inquiry.phoneMatchExcluded ? 'Existing patient' : 'Wix'}
                   </span>
                 </div>
 

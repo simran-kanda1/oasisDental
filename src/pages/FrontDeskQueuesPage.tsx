@@ -16,9 +16,16 @@ import {
   NO_APPT_BOOKED_QUEUE_DEF,
   NO_APPT_BOOKED_QUEUE_ID,
   buildQueueRows,
+  getFrontDeskQueueDef,
+  isStandaloneFrontDeskQueue,
   type AgeBucketFilter,
+  type QueueBuildContext,
   type VisitWeekBucketFilter,
 } from '../data/queueRules';
+import type { DentrixProcedureCodeDoc } from '../lib/procedureCodeTypes';
+import { getQueueCodeRulesLabel } from '../lib/queueProcedureCodes';
+import { fetchLedgerForPatients } from '../lib/ledgerTransactions';
+import type { DentrixLedgerTransactionDoc } from '../lib/ledgerTransactions';
 import FollowUpsPage from './FollowUpsPage';
 import type { DentrixAppointmentDoc, DentrixPatientDoc } from '../lib/dentrix';
 import { PatientProfileTrigger } from '../components/PatientProfileTrigger';
@@ -35,17 +42,21 @@ import {
   type DentrixReferralDoc,
   type ReferralProgressTrackingDoc,
 } from '../lib/referralDoctorQueue';
+import { useNavBadges } from '../contexts/NavBadgeContext';
 
 const REFERRAL_DOCTOR_QUEUE_ID = 'referral_doctor_followup';
 
 const AGE_OPTIONS: { id: AgeBucketFilter; label: string }[] = [
   { id: 'all', label: 'All dates' },
-  { id: '0-3', label: 'Up to 3 mo' },
+  { id: '0-1', label: '0–1 mo' },
+  { id: '1-3', label: '1–3 mo' },
   { id: '3-6', label: '3–6 mo' },
   { id: '6-9', label: '6–9 mo' },
   { id: '9-12', label: '9–12 mo' },
-  { id: '12+', label: '12 mo +' },
+  { id: '12+', label: '1+ yr' },
 ];
+
+const LEDGER_PATIENT_CAP = 400;
 
 const WEEK_OPTIONS: { id: VisitWeekBucketFilter; label: string }[] = [
   { id: 'all', label: 'All' },
@@ -64,7 +75,17 @@ export interface FrontDeskQueuesPageProps {
   initialQueueId?: string;
 }
 
+function QueueNavBadge({ count }: { count: number }) {
+  if (count <= 0) return null;
+  return (
+    <span className="ml-auto min-w-[1.1rem] px-1.5 py-0.5 rounded-full bg-teal-600 text-white text-[9px] font-black text-center">
+      {count > 99 ? '99+' : count}
+    </span>
+  );
+}
+
 const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueId }) => {
+  const { frontDeskByQueue } = useNavBadges();
   const [activeId, setActiveId] = useState(initialQueueId ?? FRONT_DESK_QUEUE_DEFS[0].id);
 
   useEffect(() => {
@@ -87,6 +108,52 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
   const [savingApptId, setSavingApptId] = useState<string | null>(null);
   const [savingRefDocId, setSavingRefDocId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [procedureCodes, setProcedureCodes] = useState<DentrixProcedureCodeDoc[]>([]);
+  const [ledgerByPatientId, setLedgerByPatientId] = useState<Map<number, DentrixLedgerTransactionDoc[]>>(new Map());
+  const [ledgerLoading, setLedgerLoading] = useState(false);
+  const [saveNoticeApptId, setSaveNoticeApptId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const unsubProc = onSnapshot(collection(db, 'procedure_codes'), (snap) => {
+      setProcedureCodes(snap.docs.map((d) => ({ id: d.id, ...d.data() } as DentrixProcedureCodeDoc)));
+    });
+    return unsubProc;
+  }, []);
+
+  useEffect(() => {
+    const ids: string[] = [];
+    const seen = new Set<string>();
+    for (const a of appointments) {
+      const pid = String(a.patient_id ?? '');
+      if (!pid || seen.has(pid)) continue;
+      seen.add(pid);
+      ids.push(pid);
+      if (ids.length >= LEDGER_PATIENT_CAP) break;
+    }
+    if (!ids.length) {
+      setLedgerByPatientId(new Map());
+      return;
+    }
+
+    let cancelled = false;
+    setLedgerLoading(true);
+    void fetchLedgerForPatients(ids)
+      .then((map) => {
+        if (!cancelled) setLedgerByPatientId(map);
+      })
+      .finally(() => {
+        if (!cancelled) setLedgerLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [appointments]);
+
+  const queueBuildCtx = useMemo<QueueBuildContext>(
+    () => ({ procedureCodes, ledgerByPatientId }),
+    [procedureCodes, ledgerByPatientId]
+  );
 
   useEffect(() => {
     const unsubA = onSnapshot(
@@ -171,9 +238,10 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
       0,
       new Date(),
       ageBucket,
-      USE_WEEK_FILTER.has(activeId) ? visitWeekBucket : 'all'
+      USE_WEEK_FILTER.has(activeId) ? visitWeekBucket : 'all',
+      queueBuildCtx
     );
-  }, [activeId, appointments, patientsById, ageBucket, visitWeekBucket]);
+  }, [activeId, appointments, patientsById, ageBucket, visitWeekBucket, queueBuildCtx]);
 
   const patientReferralLinks = useMemo(
     () => PATIENT_REFERRAL_LINK_COLLECTIONS.flatMap((c) => patientReferralLinksByCol[c] ?? []),
@@ -193,11 +261,19 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
     });
   }, [referralRows, referralProgressByDocId, referralProgressFilter]);
 
-  const activeDef =
-    activeId === NO_APPT_BOOKED_QUEUE_ID
-      ? NO_APPT_BOOKED_QUEUE_DEF
-      : FRONT_DESK_QUEUE_DEFS.find((d) => d.id === activeId);
+  const queueNavCount = (queueId: string) => {
+    if (queueId === REFERRAL_DOCTOR_QUEUE_ID) {
+      return referralRows.filter((row) => {
+        const tr = referralProgressByDocId[row.progressDocId];
+        return tr?.referrerUpdatedOnProgress !== true;
+      }).length;
+    }
+    return frontDeskByQueue[queueId] ?? 0;
+  };
+
+  const activeDef = getFrontDeskQueueDef(activeId);
   const isNoApptBookedQueue = activeId === NO_APPT_BOOKED_QUEUE_ID;
+  const isStandaloneQueue = isStandaloneFrontDeskQueue(activeId);
   const showAgeFilter =
     !isNoApptBookedQueue &&
     activeId !== 'no_shows_past_week' &&
@@ -206,84 +282,103 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
   const showWeekFilter = USE_WEEK_FILTER.has(activeId);
   const isReferralQueue = activeId === REFERRAL_DOCTOR_QUEUE_ID;
 
+  const flashQueueSaveNotice = useCallback((appointmentFirestoreId: string) => {
+    setSaveNoticeApptId(appointmentFirestoreId);
+    window.setTimeout(() => {
+      setSaveNoticeApptId((prev) => (prev === appointmentFirestoreId ? null : prev));
+    }, 2500);
+  }, []);
+
   const persistTracking = useCallback(
     async (appointmentFirestoreId: string, patientId: string, patch: Partial<QueueRowTrackingDoc>) => {
       setSavingApptId(appointmentFirestoreId);
-      const id = queueTrackingDocId(appointmentFirestoreId);
-      await setDoc(
-        doc(db, QUEUE_ROW_TRACKING_COLLECTION, id),
-        {
-          appointmentId: id,
-          patientId,
-          queueId: activeId,
-          updatedAt: new Date().toISOString(),
-          ...patch,
-        },
-        { merge: true }
-      );
-      setSavingApptId(null);
+      try {
+        const id = queueTrackingDocId(appointmentFirestoreId);
+        await setDoc(
+          doc(db, QUEUE_ROW_TRACKING_COLLECTION, id),
+          {
+            appointmentId: id,
+            patientId,
+            queueId: activeId,
+            updatedAt: new Date().toISOString(),
+            ...patch,
+          },
+          { merge: true }
+        );
+        flashQueueSaveNotice(appointmentFirestoreId);
+      } finally {
+        setSavingApptId(null);
+      }
     },
-    [activeId]
+    [activeId, flashQueueSaveNotice]
   );
 
   const persistReferralProgress = useCallback(
     async (row: { progressDocId: string; patientId: string; referralRefId: number }, patch: Partial<ReferralProgressTrackingDoc>) => {
       setSavingRefDocId(row.progressDocId);
-      await setDoc(
-        doc(db, REFERRAL_PROGRESS_TRACKING_COLLECTION, row.progressDocId),
-        {
-          patientId: row.patientId,
-          referralRefId: row.referralRefId,
-          updatedAt: new Date().toISOString(),
-          ...patch,
-        },
-        { merge: true }
-      );
-      setSavingRefDocId(null);
+      try {
+        await setDoc(
+          doc(db, REFERRAL_PROGRESS_TRACKING_COLLECTION, row.progressDocId),
+          {
+            patientId: row.patientId,
+            referralRefId: row.referralRefId,
+            updatedAt: new Date().toISOString(),
+            ...patch,
+          },
+          { merge: true }
+        );
+      } finally {
+        setSavingRefDocId(null);
+      }
     },
     []
   );
 
   const reasonDisabled = (rebooked: boolean | undefined) => activeId === 'no_shows_past_week' && rebooked === true;
 
-  const showMainLoader = isNoApptBookedQueue ? false : isReferralQueue ? !referralsReady : loading;
+  const showMainLoader = isNoApptBookedQueue ? false : isReferralQueue ? !referralsReady : loading || ledgerLoading;
 
   if (!activeDef) {
     return null;
   }
 
   return (
-    <div className="flex flex-col md:flex-row min-h-[calc(100vh-3rem)] bg-slate-50/80 font-sans">
-      <aside className="w-full md:w-56 shrink-0 border-b md:border-b-0 md:border-r border-slate-200 bg-white p-3 overflow-y-auto max-h-[36vh] md:max-h-none">
-        <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest px-2 mb-2">No future appointments</p>
-        <nav className="space-y-0.5">
-          <button
-            type="button"
-            onClick={() => setActiveId(NO_APPT_BOOKED_QUEUE_ID)}
-            className={cn(
-              'w-full text-left px-3 py-2 rounded-lg text-[10px] font-bold uppercase tracking-tight transition-colors',
-              activeId === NO_APPT_BOOKED_QUEUE_ID
-                ? 'bg-teal-50 text-teal-800 border border-teal-100'
-                : 'text-slate-600 hover:bg-slate-50 border border-transparent'
-            )}
-          >
-            {NO_APPT_BOOKED_QUEUE_DEF.label}
-          </button>
-          {FRONT_DESK_QUEUE_DEFS.map((q) => (
+    <div className={cn('flex min-h-[calc(100vh-3rem)] bg-slate-50/80 font-sans', !isStandaloneQueue && 'flex-col md:flex-row')}>
+      {!isStandaloneQueue && (
+        <aside className="w-full md:w-56 shrink-0 border-b md:border-b-0 md:border-r border-slate-200 bg-white p-3 overflow-y-auto max-h-[36vh] md:max-h-none">
+          <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest px-2 mb-2">No future appointments</p>
+          <nav className="space-y-0.5">
             <button
-              key={q.id}
               type="button"
-              onClick={() => setActiveId(q.id)}
+              onClick={() => setActiveId(NO_APPT_BOOKED_QUEUE_ID)}
               className={cn(
-                'w-full text-left px-3 py-2 rounded-lg text-[10px] font-bold uppercase tracking-tight transition-colors',
-                activeId === q.id ? 'bg-teal-50 text-teal-800 border border-teal-100' : 'text-slate-600 hover:bg-slate-50 border border-transparent'
+                'w-full flex items-center gap-2 text-left px-3 py-2 rounded-lg text-[10px] font-bold uppercase tracking-tight transition-colors',
+                activeId === NO_APPT_BOOKED_QUEUE_ID
+                  ? 'bg-teal-50 text-teal-800 border border-teal-100'
+                  : 'text-slate-600 hover:bg-slate-50 border border-transparent'
               )}
             >
-              {q.label}
+              <span className="truncate">{NO_APPT_BOOKED_QUEUE_DEF.label}</span>
+              <QueueNavBadge count={queueNavCount(NO_APPT_BOOKED_QUEUE_ID)} />
             </button>
-          ))}
-        </nav>
-      </aside>
+            {FRONT_DESK_QUEUE_DEFS.map((q) => (
+              <button
+                key={q.id}
+                type="button"
+                title={getQueueCodeRulesLabel(q.id) ? `ADA: ${getQueueCodeRulesLabel(q.id)}` : undefined}
+                onClick={() => setActiveId(q.id)}
+                className={cn(
+                  'w-full flex items-center gap-2 text-left px-3 py-2 rounded-lg text-[10px] font-bold uppercase tracking-tight transition-colors',
+                  activeId === q.id ? 'bg-teal-50 text-teal-800 border border-teal-100' : 'text-slate-600 hover:bg-slate-50 border border-transparent'
+                )}
+              >
+                <span className="truncate">{q.label}</span>
+                <QueueNavBadge count={queueNavCount(q.id)} />
+              </button>
+            ))}
+          </nav>
+        </aside>
+      )}
       <main className="flex-1 p-4 md:p-6 overflow-auto">
         {isNoApptBookedQueue ? (
           <FollowUpsPage embedded />
@@ -293,6 +388,12 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
           <div>
             <h1 className="text-xl font-black text-slate-900 uppercase tracking-tight">{activeDef.label}</h1>
             <p className="text-[11px] text-slate-500 mt-1 max-w-3xl">{activeDef.description}</p>
+            {getQueueCodeRulesLabel(activeId) ? (
+              <p className="text-[10px] font-bold text-teal-800 mt-2 font-mono tracking-tight">
+                ADA codes: {getQueueCodeRulesLabel(activeId)}
+                {activeId === 'new_patient_follow_up' ? ' (plus appointment text match)' : ''}
+              </p>
+            ) : null}
           </div>
           {isReferralQueue && (
             <div className="flex flex-wrap items-center gap-2">
@@ -527,6 +628,12 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
                           <>
                             <td className="p-3 text-xs text-slate-600 tabular-nums">
                               {row.monthsSince != null ? `${row.monthsSince} mo` : '—'}
+                              {row.recallIntervalMonths != null && (
+                                <p className="text-[9px] text-slate-400 font-bold mt-0.5">
+                                  {row.recallIntervalMonths} mo recall
+                                  {row.isOverdue ? ' · overdue' : ''}
+                                </p>
+                              )}
                             </td>
                             <td className="p-3 text-xs text-slate-500">{row.provider ?? '—'}</td>
                           </>
@@ -560,24 +667,29 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
                             }
                             placeholder="Internal notes…"
                           />
-                          <button
-                            type="button"
-                            className="mt-1 text-[9px] font-black uppercase text-teal-700 hover:underline disabled:opacity-40"
-                            disabled={savingApptId === row.appointmentFirestoreId}
-                            onClick={() =>
-                              persistTracking(row.appointmentFirestoreId, row.patientId, {
-                                notes: noteVal.trim() || undefined,
-                              }).then(() =>
-                                setNoteDraftByApptId((prev) => {
-                                  const next = { ...prev };
-                                  delete next[draftKey];
-                                  return next;
-                                })
-                              )
-                            }
-                          >
-                            Save notes
-                          </button>
+                          <div className="mt-1 flex items-center gap-2">
+                            <button
+                              type="button"
+                              className="text-[9px] font-black uppercase text-teal-700 hover:underline disabled:opacity-40"
+                              disabled={savingApptId === row.appointmentFirestoreId}
+                              onClick={() =>
+                                persistTracking(row.appointmentFirestoreId, row.patientId, {
+                                  notes: noteVal.trim() || undefined,
+                                }).then(() =>
+                                  setNoteDraftByApptId((prev) => {
+                                    const next = { ...prev };
+                                    delete next[draftKey];
+                                    return next;
+                                  })
+                                )
+                              }
+                            >
+                              Save notes
+                            </button>
+                            {saveNoticeApptId === row.appointmentFirestoreId && (
+                              <span className="text-[9px] font-bold text-teal-700 uppercase">Saved</span>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     );

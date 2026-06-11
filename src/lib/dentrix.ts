@@ -1,4 +1,5 @@
 import { format, isValid, parseISO } from 'date-fns';
+import { Timestamp } from 'firebase/firestore';
 
 export const DENTRIX_EMPTY_DATE_PREFIX = '1970-01-01';
 
@@ -95,11 +96,48 @@ export const cleanDentrixText = (value: unknown): string => {
 };
 
 export const parseDentrixDate = (value: unknown): Date | null => {
-  if (typeof value !== 'string' || value.startsWith(DENTRIX_EMPTY_DATE_PREFIX)) {
-    return null;
+  if (value == null) return null;
+
+  if (value instanceof Timestamp) {
+    const d = value.toDate();
+    return isValid(d) ? d : null;
   }
-  const parsed = parseISO(value);
-  return isValid(parsed) ? parsed : null;
+  if (value instanceof Date) {
+    return isValid(value) ? value : null;
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const d = new Date(value);
+    return isValid(d) ? d : null;
+  }
+  if (typeof value !== 'string') return null;
+
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.startsWith(DENTRIX_EMPTY_DATE_PREFIX)) return null;
+
+  let parsed = parseISO(trimmed);
+  if (isValid(parsed)) return parsed;
+
+  const usDate = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (usDate) {
+    const [, month, day, year] = usDate;
+    parsed = new Date(Number(year), Number(month) - 1, Number(day));
+    if (isValid(parsed)) return parsed;
+  }
+
+  const dateOnly = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (dateOnly) {
+    parsed = parseISO(`${trimmed}T12:00:00`);
+    if (isValid(parsed)) return parsed;
+  }
+
+  // Dentrix / SQL-style: 2026-05-22 00:00:00.000
+  if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(trimmed)) {
+    parsed = parseISO(trimmed.replace(' ', 'T'));
+    if (isValid(parsed)) return parsed;
+  }
+
+  const fallback = new Date(trimmed);
+  return isValid(fallback) ? fallback : null;
 };
 
 export const formatDentrixDateKey = (value: unknown): string | null => {

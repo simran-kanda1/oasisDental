@@ -1,6 +1,7 @@
 import React, { Suspense, lazy, useEffect, useMemo } from 'react';
 import { BrowserRouter, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { NavBadgeProvider } from './contexts/NavBadgeContext';
 import { PatientProfileProvider } from './contexts/PatientProfileContext';
 import { Sidebar, TopBar } from './components/layout/Sidebar';
 import { AppLoadingSkeleton } from './components/ui/skeleton';
@@ -101,20 +102,20 @@ const AppShell: React.FC = () => {
     }
   };
 
-  const handleSectionChange = (id: string) => {
+  const handleSectionChange = (id: string, navQueueId?: string) => {
     if (id === 'admin' && !isAdmin) {
       navigate(DEFAULT_AUTHENTICATED_PATH);
       return;
     }
-    navigate(sectionToPath(id as AppSection));
+    navigate(sectionToPath(id as AppSection, navQueueId));
   };
 
   return (
     <PatientProfileProvider>
       <div className="min-h-screen bg-slate-50 flex font-sans text-slate-900 selection:bg-teal-100 selection:text-teal-900">
-        <Sidebar activeSection={section} onSectionChange={handleSectionChange} />
+        <Sidebar activeSection={section} activeQueueId={queueId} onSectionChange={handleSectionChange} />
         <div className="flex-1 flex flex-col min-w-0">
-          <TopBar section={section} />
+          <TopBar section={section} queueId={queueId} />
           <main className="flex-1 overflow-auto bg-slate-50/50">
             <Suspense fallback={<PageFallback />}>{renderPage()}</Suspense>
           </main>
@@ -128,7 +129,9 @@ function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
-        <AppShell />
+        <NavBadgeProvider>
+          <AppShell />
+        </NavBadgeProvider>
       </AuthProvider>
     </BrowserRouter>
   );

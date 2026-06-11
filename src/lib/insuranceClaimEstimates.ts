@@ -97,13 +97,28 @@ export function resolveClaimProcedureLines(
   });
 }
 
+function claimAdaCodes(claim: DentrixInsuranceClaimDoc): Set<string> {
+  const codes = new Set<string>();
+  for (const line of resolveClaimProcedureLines(claim)) {
+    if (line.adacode) codes.add(line.adacode);
+  }
+  return codes;
+}
+
+function scoreClaimByHintCodes(claim: DentrixInsuranceClaimDoc, hintCodes: string[]): number {
+  if (!hintCodes.length) return 0;
+  const claimCodes = claimAdaCodes(claim);
+  return hintCodes.filter((c) => claimCodes.has(normalizeProcedureCode(c))).length;
+}
+
 export function findClaimForDocument(options: {
   patientId: string;
   descript: string;
   claimsForPatient: DentrixInsuranceClaimDoc[];
   idCandidates: number[];
+  hintCodes?: string[];
 }): DentrixInsuranceClaimDoc | null {
-  const { claimsForPatient, idCandidates, descript } = options;
+  const { claimsForPatient, idCandidates, descript, hintCodes = [] } = options;
   if (!claimsForPatient.length) return null;
 
   for (const id of idCandidates) {
@@ -111,9 +126,23 @@ export function findClaimForDocument(options: {
     if (hit) return hit;
   }
 
+  if (hintCodes.length) {
+    const ranked = [...claimsForPatient]
+      .map((c) => ({ claim: c, score: scoreClaimByHintCodes(c, hintCodes) }))
+      .filter((r) => r.score > 0)
+      .sort((a, b) => b.score - a.score);
+    if (ranked[0]) return ranked[0].claim;
+  }
+
   const d = cleanDentrixText(descript).toLowerCase();
   if (d.includes('explanation') || d.includes('acknowledg') || d.includes('predet') || d.includes('benefits')) {
-    return claimsForPatient[0] ?? null;
+    if (hintCodes.length) {
+      const ranked = [...claimsForPatient]
+        .map((c) => ({ claim: c, score: scoreClaimByHintCodes(c, hintCodes) }))
+        .sort((a, b) => b.score - a.score);
+      if (ranked[0]?.score > 0) return ranked[0].claim;
+    }
+    return null;
   }
   return null;
 }

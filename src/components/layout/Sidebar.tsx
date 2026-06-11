@@ -4,6 +4,7 @@ import {
     LayoutDashboard, Calendar, MessageSquare,
     Menu, X, ChevronRight, LogOut, Bell,
     ShieldCheck, ListTodo, UsersRound, LayoutList, Settings,
+    Siren, UserPlus, Share2,
 } from 'lucide-react';
 import { GlobalPatientSearch } from '../GlobalPatientSearch';
 import { Tooth } from '../ui/icons';
@@ -15,37 +16,92 @@ import {
     markNotificationRead,
 } from '../../lib/notifications';
 import { navigateToSection } from '../../lib/navigation';
-import { NO_APPT_BOOKED_QUEUE_ID } from '../../data/queueRules';
+import { NO_APPT_BOOKED_QUEUE_ID, getFrontDeskQueueDef, isStandaloneFrontDeskQueue } from '../../data/queueRules';
 import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { format } from 'date-fns';
 import { isRecallFollowUpDoc, isOpenOutreachItem } from '../../lib/followUpQueues';
 import { isOpenWixInquiryDoc } from '../../lib/wixInquiryCounts';
+import { useNavBadges } from '../../contexts/NavBadgeContext';
 
 interface SidebarProps {
     activeSection: string;
-    onSectionChange: (section: string) => void;
+    activeQueueId?: string;
+    onSectionChange: (section: string, queueId?: string) => void;
 }
 
-const navItems = [
+type NavBadgeKind = 'inquiries' | 'frontDesk' | 'estimates' | 'queue';
+
+type NavItem = {
+    id: string;
+    label: string;
+    icon: typeof LayoutDashboard;
+    badge?: NavBadgeKind;
+    queueId?: string;
+};
+
+const navItems: NavItem[] = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'staffTasks', label: 'Checklist', icon: ListTodo },
     { id: 'appointments', label: 'Appointments', icon: Calendar },
-    { id: 'frontDeskQueues', label: 'No future appointments', icon: LayoutList },
-    { id: 'followUpOutreach', label: 'Estimates', icon: UsersRound },
-    { id: 'inquiries', label: 'Inquiries', icon: MessageSquare },
+    { id: 'frontDeskQueues', label: 'No future appointments', icon: LayoutList, badge: 'frontDesk' },
+    { id: 'emerg_follow_up', label: 'Emerg patient follow up', icon: Siren, badge: 'queue', queueId: 'emerg_follow_up' },
+    { id: 'new_patient_follow_up', label: 'New patient follow up', icon: UserPlus, badge: 'queue', queueId: 'new_patient_follow_up' },
+    { id: 'referral_doctor_followup', label: 'Referrals', icon: Share2, badge: 'queue', queueId: 'referral_doctor_followup' },
+    { id: 'followUpOutreach', label: 'Estimates', icon: UsersRound, badge: 'estimates' },
+    { id: 'inquiries', label: 'Inquiries', icon: MessageSquare, badge: 'inquiries' },
 ];
 
-export const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange }) => {
+function NavCountBadge({ count, tone = 'teal' }: { count: number; tone?: 'teal' | 'amber' }) {
+    if (count <= 0) return null;
+    return (
+        <span
+            className={cn(
+                'ml-auto min-w-[1.25rem] px-1.5 py-0.5 rounded-full text-[9px] font-black text-center leading-none',
+                tone === 'amber' ? 'bg-amber-500 text-white' : 'bg-teal-600 text-white'
+            )}
+        >
+            {count > 99 ? '99+' : count}
+        </span>
+    );
+}
+
+export const Sidebar: React.FC<SidebarProps> = ({ activeSection, activeQueueId, onSectionChange }) => {
     const { userProfile, user, logout, isAdmin } = useAuth();
+    const badges = useNavBadges();
     const [collapsed, setCollapsed] = useState(false);
     const [mobileOpen, setMobileOpen] = useState(false);
+
+    const navBadgeCount = (item: NavItem) => {
+        if (item.badge === 'inquiries') return badges.openInquiries;
+        if (item.badge === 'frontDesk') return badges.frontDeskTotal;
+        if (item.badge === 'estimates') return badges.estimatePredApproved + badges.estimatePredFollowUp;
+        if (item.badge === 'queue' && item.queueId) return badges.frontDeskByQueue[item.queueId] ?? 0;
+        return 0;
+    };
+
+    const isNavItemActive = (item: NavItem) => {
+        if (item.queueId) {
+            return activeSection === 'frontDeskQueues' && activeQueueId === item.queueId;
+        }
+        if (item.id === 'frontDeskQueues') {
+            return (
+                activeSection === 'frontDeskQueues' &&
+                (!activeQueueId || activeQueueId === NO_APPT_BOOKED_QUEUE_ID || !isStandaloneFrontDeskQueue(activeQueueId))
+            );
+        }
+        return activeSection === item.id;
+    };
 
     const displayName = userProfile?.displayName ?? user?.email?.split('@')[0] ?? 'User';
     const initials = displayName.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase();
 
-    const handleNav = (id: string) => {
-        onSectionChange(id);
+    const handleNav = (item: NavItem) => {
+        if (item.queueId) {
+            onSectionChange('frontDeskQueues', item.queueId);
+        } else {
+            onSectionChange(item.id);
+        }
         setMobileOpen(false);
     };
 
@@ -63,11 +119,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange
             <nav className="flex-1 px-3 py-6 space-y-1 overflow-y-auto">
                 {navItems.map((item) => {
                     const Icon = item.icon;
-                    const isActive = activeSection === item.id;
+                    const isActive = isNavItemActive(item);
                     return (
                         <button
                             key={item.id}
-                            onClick={() => handleNav(item.id)}
+                            onClick={() => handleNav(item)}
                             className={cn(
                                 "w-full flex items-center gap-3 px-3 py-2 rounded-md text-[11px] font-bold uppercase tracking-tight transition-all",
                                 isActive
@@ -77,7 +133,15 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange
                             )}
                         >
                             <Icon size={16} className={isActive ? "text-teal-600" : "text-slate-300"} />
-                            {!collapsed && <span className="flex-1 text-left">{item.label}</span>}
+                            {!collapsed && (
+                                <>
+                                    <span className="flex-1 text-left">{item.label}</span>
+                                    <NavCountBadge
+                                        count={navBadgeCount(item)}
+                                        tone={item.badge === 'estimates' ? 'amber' : 'teal'}
+                                    />
+                                </>
+                            )}
                         </button>
                     );
                 })}
@@ -86,7 +150,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange
                     <div className="pt-8">
                         {!collapsed && <p className="px-4 text-[8px] font-black text-slate-300 uppercase tracking-[0.3em] mb-2">Admin</p>}
                         <button
-                            onClick={() => handleNav('admin')}
+                            onClick={() => {
+                                onSectionChange('admin');
+                                setMobileOpen(false);
+                            }}
                             className={cn(
                                 "w-full flex items-center gap-3 px-3 py-2 rounded-md text-[11px] font-bold uppercase tracking-tight transition-all",
                                 activeSection === 'admin' ? "bg-slate-900 text-white shadow-xl" : "text-slate-400 hover:text-slate-600 hover:bg-slate-50",
@@ -173,7 +240,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange
     );
 };
 
-export const TopBar: React.FC<{ section: string }> = ({ section }) => {
+export const TopBar: React.FC<{ section: string; queueId?: string }> = ({ section, queueId }) => {
     const { userProfile, user, isAdmin } = useAuth();
     const [notifications, setNotifications] = useState<AppNotification[]>([]);
     const [showNotifications, setShowNotifications] = useState(false);
@@ -310,12 +377,17 @@ export const TopBar: React.FC<{ section: string }> = ({ section }) => {
         settings: 'Settings',
     };
 
+    const headerTitle =
+        section === 'frontDeskQueues' && queueId
+            ? (getFrontDeskQueueDef(queueId)?.label ?? sectionLabels[section])
+            : (sectionLabels[section] ?? section);
+
     const today = format(new Date(), 'EEEE, MMMM d');
 
     return (
         <header className="h-12 bg-white/80 backdrop-blur-md border-b border-slate-100 flex items-center px-4 md:px-8 justify-between sticky top-0 z-20 gap-4">
             <div className="min-w-0 shrink">
-                <h2 className="text-xs font-bold text-slate-800 tracking-tight uppercase leading-none truncate">{sectionLabels[section] ?? section}</h2>
+                <h2 className="text-xs font-bold text-slate-800 tracking-tight uppercase leading-none truncate">{headerTitle}</h2>
                 <p className="text-[9px] font-bold text-teal-600/50 mt-1 uppercase tracking-widest leading-none">{today}</p>
             </div>
 

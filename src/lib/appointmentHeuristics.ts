@@ -1,6 +1,48 @@
 import type { DentrixAppointmentDoc, DentrixPatientAppointmentInfoDoc } from './dentrix';
 import { cleanDentrixText, formatDentrixDateKey, parseDentrixDate } from './dentrix';
-import { isAfter, isSameDay, startOfDay } from 'date-fns';
+import { addMonths, isAfter, isBefore, isSameDay, startOfDay } from 'date-fns';
+
+/**
+ * Parse recall interval from appointment label.
+ * 4M / 4m / 4 mo / 2 months → 4 or 2 (months until next visit is expected).
+ */
+export function parseRecallIntervalMonths(label: string): number | null {
+  const s = label.toLowerCase();
+  const patterns = [
+    /\b(\d{1,2})\s*m(?:o(?:nth)?s?)?\b/,
+    /(?:^|\s)(\d{1,2})m(?:\s|$)/,
+  ];
+  for (const re of patterns) {
+    const m = s.match(re);
+    if (m) {
+      const n = Number(m[1]);
+      if (n >= 1 && n <= 24) return n;
+    }
+  }
+  return null;
+}
+
+/** Last visit + interval months (e.g. Apr 10 + 2M → Jun 10). */
+export function getRecallDueDate(
+  appt: DentrixAppointmentDoc,
+  intervalMonths?: number | null
+): Date | null {
+  const visitDate = parseDentrixDate(appt.appointment_date);
+  if (!visitDate) return null;
+  const interval =
+    intervalMonths ?? parseRecallIntervalMonths(appointmentLabelText(appt));
+  if (interval === null) return null;
+  return addMonths(startOfDay(visitDate), interval);
+}
+
+/** Overdue when today is on or after the recall due date. */
+export function isRecallOverdue(appt: DentrixAppointmentDoc, now: Date): boolean {
+  const interval = parseRecallIntervalMonths(appointmentLabelText(appt));
+  if (interval === null) return true;
+  const dueDate = getRecallDueDate(appt, interval);
+  if (!dueDate) return false;
+  return !isBefore(startOfDay(now), dueDate);
+}
 
 export function appointmentLabelText(a: DentrixAppointmentDoc): string {
   const parts = [

@@ -1,33 +1,64 @@
+import { collection, limit, orderBy, query, type Firestore } from 'firebase/firestore';
 import { cleanDentrixText, formatDentrixDateKey, formatPatientFullName, parseDentrixDate, type DentrixPatientDoc } from './dentrix';
 
-/** How far back to load Document Center rows for the estimates page. */
-export type EstimateDocumentLookback = '1' | '3' | '6' | '9' | 'all';
+/** Cap Firestore reads — full `documents` collection is 70k+ rows in production. */
+export const ESTIMATE_DOCUMENTS_QUERY_LIMIT = 3000;
 
-export const ESTIMATE_DOCUMENT_LOOKBACK_OPTIONS: { id: EstimateDocumentLookback; label: string }[] = [
-  { id: '1', label: 'Up to 1 month' },
-  { id: '3', label: 'Up to 3 months' },
-  { id: '6', label: 'Up to 6 months' },
-  { id: '9', label: 'Up to 9 months' },
-  { id: 'all', label: 'All' },
-];
+import {
+  DEFAULT_ESTIMATE_AGE_BUCKET,
+  ESTIMATE_AGE_BUCKET_OPTIONS,
+  ESTIMATE_DOCUMENT_FETCH_MONTHS,
+  type EstimateAgeBucket,
+} from './estimateTreatment';
 
-export const DEFAULT_ESTIMATE_DOCUMENT_LOOKBACK: EstimateDocumentLookback = '1';
+export type { EstimateAgeBucket };
+export { ESTIMATE_AGE_BUCKET_OPTIONS, DEFAULT_ESTIMATE_AGE_BUCKET };
 
-export function estimateDocumentSince(lookback: EstimateDocumentLookback): Date | null {
-  if (lookback === 'all') return null;
-  const months = Number(lookback);
-  if (!Number.isFinite(months) || months <= 0) return null;
+/** @deprecated use EstimateAgeBucket — kept for imports during migration */
+export type EstimateDocumentLookback = EstimateAgeBucket;
+
+export const ESTIMATE_DOCUMENT_LOOKBACK_OPTIONS = ESTIMATE_AGE_BUCKET_OPTIONS;
+export const DEFAULT_ESTIMATE_DOCUMENT_LOOKBACK = DEFAULT_ESTIMATE_AGE_BUCKET;
+
+export function estimateDocumentsFirestoreQuery(db: Firestore, _ageBucket: EstimateAgeBucket = 'all') {
+  const coll = collection(db, 'documents');
+  // No server-side date filter — createdate is string or Timestamp depending on sync row.
+  // Fetch the newest batch, then apply the 15-month window in isDocumentWithinLookback.
+  return query(coll, orderBy('createdate', 'desc'), limit(ESTIMATE_DOCUMENTS_QUERY_LIMIT));
+}
+
+/** Firestore window — exclusive aging buckets are applied client-side on treatment date. */
+export function estimateDocumentFetchSince(): Date | null {
   const since = new Date();
-  since.setMonth(since.getMonth() - months);
+  since.setMonth(since.getMonth() - ESTIMATE_DOCUMENT_FETCH_MONTHS);
   since.setHours(0, 0, 0, 0);
   return since;
 }
 
-export function isDocumentWithinLookback(createdate: unknown, lookback: EstimateDocumentLookback): boolean {
-  const since = estimateDocumentSince(lookback);
+export function estimateDocumentSince(_lookback: EstimateAgeBucket): Date | null {
+  return estimateDocumentFetchSince();
+}
+
+/** Prefer Document Center create date; fall back to Dentrix modified time when sync omits createdate. */
+export function documentEffectiveDate(
+  doc: Pick<DentrixDocumentDoc, 'createdate' | 'modifiedtimestamp'>
+): unknown {
+  return doc.createdate ?? doc.modifiedtimestamp;
+}
+
+export function isDocumentWithinLookback(
+  createdate: unknown,
+  _lookback: EstimateAgeBucket = 'all',
+  modifiedtimestamp?: unknown
+): boolean {
+  const since = estimateDocumentFetchSince();
+  const docDate = parseDentrixDate(createdate) ?? parseDentrixDate(modifiedtimestamp);
+  if (!docDate) {
+    const hasDateField =
+      (createdate != null && createdate !== '') || (modifiedtimestamp != null && modifiedtimestamp !== '');
+    return hasDateField;
+  }
   if (!since) return true;
-  const docDate = parseDentrixDate(createdate);
-  if (!docDate) return false;
   return docDate >= since;
 }
 
@@ -80,6 +111,11 @@ export function classifyDocumentEstimateStatus(descript: string): DocumentEstima
   const d = descript.trim().toLowerCase();
   if (!d) return 'unclassified';
   if (d.includes('explanation of benefits') || d.includes('explanation of benefit')) return 'covered_eob';
+  // Pre-d / claim acknowledgments → follow-up tab (not EOB "explanation" docs)
+  if (d.includes('pre-determination acknowledgment') || d.includes('pre-determination acknowledgement')) {
+    return 'needs_follow_up';
+  }
+  if (d.includes('claim acknowledgment') || d.includes('claim acknowledgement')) return 'needs_follow_up';
   if (d.includes('acknowledgment') || d.includes('acknowledgement')) return 'needs_follow_up';
   if (d.includes('explanation')) return 'book_right_away';
   return 'unclassified';
@@ -116,6 +152,18 @@ export function workflowStatusBadgeClass(status: DocumentEstimateWorkflowStatus)
 }
 
 /** Map docid → patient_id from patient attachments only. */
+/** Estimate-relevant docs in the lookback window (no attachment fetch needed to classify). */
+export function filterEstimateCandidateDocuments(
+  documents: DentrixDocumentDoc[],
+  lookback: EstimateAgeBucket = DEFAULT_ESTIMATE_AGE_BUCKET
+): DentrixDocumentDoc[] {
+  return documents.filter((doc) => {
+    if (!isDocumentWithinLookback(doc.createdate, lookback, doc.modifiedtimestamp)) return false;
+    const descript = cleanDentrixText(doc.descript) || '';
+    return classifyDocumentEstimateStatus(descript) !== 'unclassified';
+  });
+}
+
 export function buildDocIdToPatientIdMap(attachments: DentrixDocumentAttachmentDoc[]): Map<number, string> {
   const map = new Map<number, string>();
   for (const a of attachments) {
@@ -132,16 +180,16 @@ export function buildDocumentEstimateWorkItems(
   documents: DentrixDocumentDoc[],
   docIdToPatientId: Map<number, string>,
   patientsById: Record<string, DentrixPatientDoc>,
-  options?: { includeUnclassified?: boolean; lookback?: EstimateDocumentLookback }
+  options?: { includeUnclassified?: boolean; lookback?: EstimateAgeBucket }
 ): DocumentEstimateWorkItem[] {
   const includeUnclassified = options?.includeUnclassified ?? false;
-  const lookback = options?.lookback ?? DEFAULT_ESTIMATE_DOCUMENT_LOOKBACK;
+  const lookback = options?.lookback ?? DEFAULT_ESTIMATE_AGE_BUCKET;
   const rows: DocumentEstimateWorkItem[] = [];
 
   for (const doc of documents) {
     const docId = Number(doc.docid ?? doc.id);
     if (!Number.isFinite(docId) || docId <= 0) continue;
-    if (!isDocumentWithinLookback(doc.createdate, lookback)) continue;
+    if (!isDocumentWithinLookback(doc.createdate, lookback, doc.modifiedtimestamp)) continue;
 
     const descript = cleanDentrixText(doc.descript) || '';
     const workflowStatus = classifyDocumentEstimateStatus(descript);
@@ -157,6 +205,8 @@ export function buildDocumentEstimateWorkItems(
         : `Patient #${patientId}`;
     const patientGuid = patient?.patient_guid ? cleanDentrixText(patient.patient_guid) : null;
 
+    const effectiveDate = documentEffectiveDate(doc);
+    const createdLabel = formatDentrixDateKey(effectiveDate);
     rows.push({
       docFirestoreId: doc.id,
       docId,
@@ -164,8 +214,8 @@ export function buildDocumentEstimateWorkItems(
       patientGuid: patientGuid || null,
       patientName: cleanDentrixText(patientName) || `Patient #${patientId}`,
       descript: descript || '—',
-      createdate: typeof doc.createdate === 'string' ? doc.createdate : undefined,
-      createdLabel: formatDentrixDateKey(doc.createdate),
+      createdate: createdLabel ?? (typeof effectiveDate === 'string' ? effectiveDate : undefined),
+      createdLabel,
       workflowStatus,
       followUpDocId: documentFollowUpDocId(docId),
     });
