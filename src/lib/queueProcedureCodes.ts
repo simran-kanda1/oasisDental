@@ -24,7 +24,6 @@ export interface QueueProcedureConfig {
 export const QUEUE_PROCEDURE_CONFIGS: QueueProcedureConfig[] = [
   { queueId: 'cbct', codeRules: [{ type: 'range', begin: '07000', end: '07043' }] },
   { queueId: 'fillings', codeRules: [{ type: 'range', begin: '23111', end: '23515' }] },
-  { queueId: 'crowns', codeRules: [{ type: 'range', begin: '27000', end: '27999' }] },
   { queueId: 'root_canal', codeRules: [{ type: 'range', begin: '30000', end: '39999' }] },
   { queueId: 'perio', codeRules: [{ type: 'range', begin: '40000', end: '49999' }] },
   { queueId: 'implants', codeRules: [{ type: 'range', begin: '79000', end: 'AOX-SXG' }] },
@@ -38,13 +37,12 @@ export const QUEUE_PROCEDURE_CONFIGS: QueueProcedureConfig[] = [
   { queueId: 'gum_grafting', codeRules: [{ type: 'range', begin: '42511', end: '42592' }] },
   { queueId: 'extraction', codeRules: [{ type: 'range', begin: '71101', end: '72331' }] },
   {
-    queueId: 'general_anesthesia',
+    queueId: 'ga_all_appointments',
     codeRules: [
       { type: 'range', begin: '92222', end: '92229' },
       { type: 'range', begin: '92232', end: '92239' },
     ],
   },
-  { queueId: 'ortho_follow_ups', codeRules: [{ type: 'range', begin: '80000', end: '89999' }] },
   {
     queueId: 'night_guard',
     codeRules: [

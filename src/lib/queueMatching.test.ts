@@ -4,7 +4,7 @@ import {
   isRecallOverdue,
   parseRecallIntervalMonths,
 } from './appointmentHeuristics';
-import { buildQueueRows, matchesAgeBucket } from '../data/queueRules';
+import { buildQueueRows, matchesAgeBucket, isHygieneRecallLabel, GA_ALL_APPOINTMENTS_QUEUE_ID } from '../data/queueRules';
 import type { DentrixAppointmentDoc } from './dentrix';
 import {
   anyCodeMatchesQueue,
@@ -56,12 +56,20 @@ describe('queue procedure codes', () => {
     expect(codeMatchesQueueRule('42650', { type: 'range', begin: '42611', end: '42703' })).toBe(true);
   });
 
-  it('matches crown, cbct, and perio ranges', () => {
-    expect(anyCodeMatchesQueue(['27201'], 'crowns')).toBe(true);
+  it('matches ga, cbct, and perio ranges', () => {
+    expect(anyCodeMatchesQueue(['92222'], GA_ALL_APPOINTMENTS_QUEUE_ID)).toBe(true);
     expect(anyCodeMatchesQueue(['07011'], 'cbct')).toBe(true);
     expect(anyCodeMatchesQueue(['41101'], 'perio')).toBe(true);
     expect(anyCodeMatchesQueue(['27201'], 'fillings')).toBe(false);
     expect(anyCodeMatchesQueue(['M0000022'], 'tmj_mri')).toBe(true);
+  });
+});
+
+describe('isHygieneRecallLabel', () => {
+  it('treats 3M and 4M recall labels as hygiene', () => {
+    expect(isHygieneRecallLabel('4m')).toBe(true);
+    expect(isHygieneRecallLabel('3M recall')).toBe(true);
+    expect(isHygieneRecallLabel('crown prep 4m')).toBe(false);
   });
 });
 
@@ -160,6 +168,27 @@ describe('recall interval queue filtering', () => {
     );
     expect(onDue).toHaveLength(1);
     expect(onDue[0].isOverdue).toBe(true);
+  });
+
+  it('lists GA appointments without requiring no future appt', () => {
+    const appts: DentrixAppointmentDoc[] = [
+      {
+        id: 'ga1',
+        patient_id: 1,
+        patient_name: 'Test Patient',
+        appointment_date: '2026-01-15T10:00:00Z',
+        reason: 'General anesthesia',
+      },
+      {
+        id: 'ga2',
+        patient_id: 1,
+        patient_name: 'Test Patient',
+        appointment_date: '2026-08-01T10:00:00Z',
+        reason: 'GA follow up',
+      },
+    ];
+    const rows = buildQueueRows(GA_ALL_APPOINTMENTS_QUEUE_ID, appts, patientsById, 0, now, 'all', 'all', {});
+    expect(rows.length).toBeGreaterThanOrEqual(1);
   });
 });
 

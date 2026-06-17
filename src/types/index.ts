@@ -55,6 +55,10 @@ export interface WixInquiry {
     wixFormId?: string;
     lastWixSyncAt?: string;
     wixSourceType?: string;
+    staffNotes?: string;
+    staffNotesUpdatedAt?: string;
+    staffNotesBy?: string;
+    duplicateOf?: string;
 }
 
 export interface EmailCampaign {

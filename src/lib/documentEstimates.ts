@@ -111,12 +111,10 @@ export function classifyDocumentEstimateStatus(descript: string): DocumentEstima
   const d = descript.trim().toLowerCase();
   if (!d) return 'unclassified';
   if (d.includes('explanation of benefits') || d.includes('explanation of benefit')) return 'covered_eob';
-  // Pre-d / claim acknowledgments → follow-up tab (not EOB "explanation" docs)
+  // Pre-d acknowledgments → follow-up tab (not EOB "explanation" docs)
   if (d.includes('pre-determination acknowledgment') || d.includes('pre-determination acknowledgement')) {
     return 'needs_follow_up';
   }
-  if (d.includes('claim acknowledgment') || d.includes('claim acknowledgement')) return 'needs_follow_up';
-  if (d.includes('acknowledgment') || d.includes('acknowledgement')) return 'needs_follow_up';
   if (d.includes('explanation')) return 'book_right_away';
   return 'unclassified';
 }

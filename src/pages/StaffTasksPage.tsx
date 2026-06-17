@@ -31,8 +31,7 @@ import { navigateToSection } from '../lib/navigation';
 import { logAudit } from '../lib/auditTrail';
 import { ChecklistWeekStrip, type ChecklistTaskRow } from '../components/checklist/ChecklistBoard';
 import { NO_APPT_BOOKED_QUEUE_ID } from '../data/queueRules';
-import { isRecallFollowUpDoc, isOpenOutreachItem } from '../lib/followUpQueues';
-import { isOpenWixInquiryDoc } from '../lib/wixInquiryCounts';
+import { useNavBadges } from '../contexts/NavBadgeContext';
 import { deriveTaskGroupFromTitle, TASK_GROUP_ORDER, type TaskGroupId } from '../lib/taskGroups';
 import type { RecurringTask } from '../data/tasksSchedule';
 import {
@@ -100,6 +99,7 @@ function templatesForDate(schedule: RecurringTask[], d: Date): RecurringTask[] {
 
 const StaffTasksPage: React.FC = () => {
     const { user, userProfile } = useAuth();
+    const badges = useNavBadges();
     const [viewMonth, setViewMonth] = useState(() => startOfMonth(new Date()));
     const [selectedDate, setSelectedDate] = useState(new Date());
     const [directives, setDirectives] = useState<Task[]>([]);
@@ -107,9 +107,6 @@ const StaffTasksPage: React.FC = () => {
     const [dentistTasks, setDentistTasks] = useState<Task[]>([]);
     const [monthTasksByDate, setMonthTasksByDate] = useState<Map<string, Task[]>>(new Map());
     const [recurringSchedule, setRecurringSchedule] = useState<RecurringTask[]>([]);
-    const [openRecallQueue, setOpenRecallQueue] = useState(0);
-    const [openOutreachQueue, setOpenOutreachQueue] = useState(0);
-    const [openInquiries, setOpenInquiries] = useState(0);
     const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
     const [commentDraft, setCommentDraft] = useState('');
     const [linkPicker, setLinkPicker] = useState<{ title: string; targets: TaskLinkTarget[] } | null>(null);
@@ -235,27 +232,9 @@ const StaffTasksPage: React.FC = () => {
         };
     }, [selectedDate, selectedDateStr, user?.email, scheduleByTemplateId]);
 
-    useEffect(() => {
-        const unsubFollowups = onSnapshot(query(collection(db, 'followUps'), where('nextAppointmentBooked', '==', false)), (snap) => {
-            let recall = 0;
-            let outreach = 0;
-            snap.docs.forEach((d) => {
-                const data = d.data() as Record<string, unknown>;
-                if (isRecallFollowUpDoc(data)) recall += 1;
-                else if (isOpenOutreachItem(data)) outreach += 1;
-            });
-            setOpenRecallQueue(recall);
-            setOpenOutreachQueue(outreach);
-        });
-        const unsubInquiries = onSnapshot(collection(db, 'wixInquiries'), (snap) => {
-            const open = snap.docs.filter((d) => isOpenWixInquiryDoc(d.data() as Record<string, unknown>)).length;
-            setOpenInquiries(open);
-        });
-        return () => {
-            unsubFollowups();
-            unsubInquiries();
-        };
-    }, []);
+    const frontDeskCount = badges.frontDeskTotal;
+    const estimateFollowUpCount = badges.estimatePredApproved + badges.estimatePredFollowUp;
+    const inquiriesCount = badges.openInquiries;
 
     const handleToggleTask = async (task: Task) => {
         const nextStatus = task.status === 'completed' ? 'pending' : 'completed';
@@ -669,8 +648,12 @@ const StaffTasksPage: React.FC = () => {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="bg-white border border-amber-200 rounded-lg p-4">
                     <p className="text-[9px] font-black text-amber-700 uppercase">No future appointments</p>
-                    <p className="text-2xl font-black text-amber-900 mt-1">{openRecallQueue}</p>
-                    <p className="text-[10px] text-slate-500 mt-1 leading-snug">Visit queues and no appt booked list</p>
+                    {badges.badgesReady ? (
+                        <p className="text-2xl font-black text-amber-900 mt-1">{frontDeskCount}</p>
+                    ) : (
+                        <div className="h-8 w-16 mt-1 rounded bg-amber-100 animate-pulse" />
+                    )}
+                    <p className="text-[10px] text-slate-500 mt-1 leading-snug">All visit queues and no appt booked patients</p>
                     <Button
                         variant="outline"
                         size="sm"
@@ -682,14 +665,18 @@ const StaffTasksPage: React.FC = () => {
                 </div>
                 <div className="bg-white border border-orange-200 rounded-lg p-4">
                     <p className="text-[9px] font-black text-orange-700 uppercase">Estimate follow-up</p>
-                    <p className="text-2xl font-black text-orange-900 mt-1">{openOutreachQueue}</p>
+                    {badges.badgesReady ? (
+                        <p className="text-2xl font-black text-orange-900 mt-1">{estimateFollowUpCount}</p>
+                    ) : (
+                        <div className="h-8 w-16 mt-1 rounded bg-orange-100 animate-pulse" />
+                    )}
                     <Button variant="outline" size="sm" className="mt-3 h-8 text-[9px] font-bold uppercase w-full" onClick={() => navigateToSection('followUpOutreach')}>
                         Open
                     </Button>
                 </div>
                 <div className="bg-white border border-indigo-200 rounded-lg p-4">
                     <p className="text-[9px] font-black text-indigo-700 uppercase">Inquiries</p>
-                    <p className="text-2xl font-black text-indigo-900 mt-1">{openInquiries}</p>
+                    <p className="text-2xl font-black text-indigo-900 mt-1">{inquiriesCount}</p>
                     <Button variant="outline" size="sm" className="mt-3 h-8 text-[9px] font-bold uppercase w-full" onClick={() => navigateToSection('inquiries')}>
                         Open
                     </Button>

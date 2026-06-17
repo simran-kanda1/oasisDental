@@ -356,6 +356,32 @@ async function runWixInquirySync(options) {
     });
     if (deletes > 0)
         await deleteBatch.commit();
+    const byPhone = new Map();
+    const allInquiries = await db.collection('wixInquiries').get();
+    allInquiries.forEach((d) => {
+        const data = d.data();
+        const phoneKey = phoneMatchKey(normalizePhoneDigits(String(data.phone ?? '')));
+        if (!phoneKey)
+            return;
+        const list = byPhone.get(phoneKey) ?? [];
+        list.push({ id: d.id, submittedAt: String(data.submittedAt ?? '') });
+        byPhone.set(phoneKey, list);
+    });
+    const dupBatch = db.batch();
+    let dupUpdates = 0;
+    for (const list of byPhone.values()) {
+        if (list.length < 2)
+            continue;
+        const sorted = [...list].sort((a, b) => b.submittedAt.localeCompare(a.submittedAt));
+        const primaryId = sorted[0].id;
+        for (let i = 1; i < sorted.length; i++) {
+            dupBatch.set(db.collection('wixInquiries').doc(sorted[i].id), { duplicateOf: primaryId }, { merge: true });
+            dupUpdates += 1;
+        }
+        dupBatch.set(db.collection('wixInquiries').doc(primaryId), { duplicateOf: null }, { merge: true });
+    }
+    if (dupUpdates > 0)
+        await dupBatch.commit();
     return { leads: upserts.length, formSubmissions, contacts, sinceIso, mode };
 }
 function mapWixError(error) {

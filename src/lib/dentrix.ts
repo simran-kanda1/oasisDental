@@ -85,7 +85,7 @@ export interface DentrixFollowUpWorkItem {
   latestProvider: string;
   latestAppointmentDate: string | null;
   latestAppointmentTime: string;
-  risk: 'high' | 'medium' | 'low';
+  risk?: 'high' | 'medium' | 'low';
 }
 
 export const cleanDentrixText = (value: unknown): string => {

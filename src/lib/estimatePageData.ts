@@ -1,6 +1,6 @@
 import { collection, doc, getDoc, getDocs, query, where } from 'firebase/firestore';
 import type { Firestore } from 'firebase/firestore';
-import type { DentrixPatientAppointmentInfoDoc } from './dentrix';
+import type { DentrixPatientAppointmentInfoDoc, DentrixAppointmentDoc } from './dentrix';
 import type { DentrixInsuranceClaimDoc } from './insuranceClaimEstimates';
 import { formatDentrixDateKey } from './dentrix';
 import type { DentrixInsuredDoc } from './procedureCodeTypes';
@@ -105,6 +105,23 @@ export function buildNextApptLabelFromPatientInfo(
   for (const [pid, info] of Object.entries(patientInfoById)) {
     const dateLabel = formatDentrixDateKey(info.next_appointment_date);
     out[pid] = dateLabel ?? '—';
+  }
+  return out;
+}
+
+/** Most recent estimate-sent appointment date per patient (from synced appointments). */
+export function buildEstimateSentLabelFromAppointments(
+  appointments: DentrixAppointmentDoc[]
+): Record<string, string | null> {
+  const out: Record<string, string | null> = {};
+  for (const a of appointments) {
+    if (a.estimate_sent !== true) continue;
+    const pid = String(a.patient_id ?? '');
+    if (!pid) continue;
+    const label = formatDentrixDateKey(a.appointment_date);
+    if (!label) continue;
+    const prev = out[pid];
+    if (!prev || label > prev) out[pid] = label;
   }
   return out;
 }

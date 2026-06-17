@@ -8,6 +8,11 @@ export interface QueueRowTrackingDoc {
   notRebookedReason?: string;
   notes?: string;
   updatedAt?: string;
+  updatedBy?: string;
+  removedFromList?: boolean;
+  removedAt?: string;
+  treatmentComplete?: boolean;
+  treatmentCompleteAt?: string;
 }
 
 export function queueTrackingDocId(appointmentFirestoreId: string): string {

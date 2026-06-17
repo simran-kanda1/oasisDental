@@ -14,6 +14,7 @@ import { FOLLOW_UP_QUEUE_RECALL, isRecallFollowUpDoc } from '../lib/followUpQueu
 import { LogOutreachModal, type OutreachLogPayload } from '../components/LogOutreachModal';
 import { PatientProfileTrigger } from '../components/PatientProfileTrigger';
 import { NOT_REBOOKED_REASON_OPTIONS } from '../lib/notRebookedReasons';
+import { APPOINTMENTS_QUERY_LIMIT } from '../lib/appointmentsQuery';
 import { appendTimestampedFollowUpNote, latestNotePreview } from '../lib/followUpNotes';
 import {
     cleanDentrixText,
@@ -21,8 +22,6 @@ import {
     formatDentrixTimeLabel,
     formatPatientFullName,
     getPatientBestPhone,
-    getPatientRiskLevel,
-    getRiskBadgeClass,
     isActiveDentrixPatient,
     type DentrixAppointmentDoc,
     type DentrixFollowUpWorkItem,
@@ -65,7 +64,6 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
     const [noteDraft, setNoteDraft] = useState('');
     const [bookingId, setBookingId] = useState<string | null>(null);
     const [bookingDraft, setBookingDraft] = useState<BookingDraft>({ date: '', type: '' });
-    const [riskFilter, setRiskFilter] = useState<'all' | 'high' | 'medium' | 'low'>('all');
     const [providerFilter, setProviderFilter] = useState<string>('all');
     const [minMissedFilter, setMinMissedFilter] = useState<number>(1);
     const [statusFilter, setStatusFilter] = useState<'open' | 'booked' | 'all'>('open');
@@ -97,7 +95,7 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
         });
 
         const unsubAppointments = onSnapshot(
-            query(collection(db, 'appointments'), orderBy('appointment_date', 'desc'), limit(5000)),
+            query(collection(db, 'appointments'), orderBy('appointment_date', 'desc'), limit(APPOINTMENTS_QUERY_LIMIT)),
             (snap) => {
                 const map: Record<string, DentrixAppointmentDoc> = {};
                 snap.docs.forEach((d) => {
@@ -165,17 +163,12 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
                 latestProvider: cleanDentrixText(latestAppt?.provider_id) || 'Unassigned',
                 latestAppointmentDate: formatDentrixDateKey(latestAppt?.appointment_date),
                 latestAppointmentTime: formatDentrixTimeLabel(latestAppt?.start_hour, latestAppt?.start_minute),
-                risk: getPatientRiskLevel(missed),
                 trackingId: `dentrix-${patientKey}`,
                 tracking,
             });
         });
 
-        rows.sort((a, b) => {
-            const riskRank = { high: 0, medium: 1, low: 2 };
-            if (riskRank[a.risk] !== riskRank[b.risk]) return riskRank[a.risk] - riskRank[b.risk];
-            return b.missedAppointments - a.missedAppointments;
-        });
+        rows.sort((a, b) => b.missedAppointments - a.missedAppointments);
 
         return rows;
     }, [patientInfoById, patientsById, latestAppointmentByPatientId, trackingByPatientId]);
@@ -188,14 +181,13 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
                 item.patientName.toLowerCase().includes(queryText) ||
                 item.patientId.toLowerCase().includes(queryText) ||
                 item.latestReason.toLowerCase().includes(queryText);
-            const matchesRisk = riskFilter === 'all' || item.risk === riskFilter;
             const matchesProvider = providerFilter === 'all' || item.latestProvider === providerFilter;
             const matchesMissed = item.missedAppointments >= minMissedFilter;
             const isBooked = !!item.tracking?.nextAppointmentBooked;
             const matchesStatus = statusFilter === 'all' || (statusFilter === 'booked' ? isBooked : !isBooked);
-            return matchesSearch && matchesRisk && matchesProvider && matchesMissed && matchesStatus;
+            return matchesSearch && matchesProvider && matchesMissed && matchesStatus;
         });
-    }, [items, search, riskFilter, providerFilter, minMissedFilter, statusFilter]);
+    }, [items, search, providerFilter, minMissedFilter, statusFilter]);
 
     const providerOptions = useMemo(() => {
         const providers = Array.from(new Set(items.map((item) => item.latestProvider))).filter(Boolean);
@@ -237,6 +229,31 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
         const prevHistory = Array.isArray(item.tracking?.outreachHistory) ? item.tracking!.outreachHistory! : [];
         const outreachHistory = [...prevHistory, entry].slice(-25);
         const summary = `${payload.channel} / ${payload.reached}${payload.outcome ? ` — ${payload.outcome}` : ''}`;
+        const notePatch = payload.notes.trim()
+            ? appendTimestampedFollowUpNote(
+                  item.tracking?.notes,
+                  payload.notes,
+                  userProfile?.displayName ?? user?.email ?? 'User'
+              )
+            : {
+                  notes: item.tracking?.notes,
+                  lastNoteAt: item.tracking?.lastNoteAt,
+                  lastNoteBy: item.tracking?.lastNoteBy,
+              };
+        const optimisticPatch: FollowUpTrackingDoc = {
+            id: item.trackingId,
+            patient_id: Number(item.patientId),
+            status: 'contacted',
+            outcome: summary,
+            followUpDate: payload.callbackDate || undefined,
+            nextAppointmentBooked: false,
+            lastOutreach: entry,
+            outreachHistory,
+            source: 'dentrix',
+            queue: FOLLOW_UP_QUEUE_RECALL,
+            ...notePatch,
+        };
+        setTrackingByPatientId((prev) => ({ ...prev, [item.patientId]: optimisticPatch }));
         await upsertTracking(item, {
             status: 'contacted',
             outcome: summary,
@@ -244,13 +261,7 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
             nextAppointmentBooked: false,
             lastOutreach: entry,
             outreachHistory,
-            ...(payload.notes.trim()
-                ? appendTimestampedFollowUpNote(
-                      item.tracking?.notes,
-                      payload.notes,
-                      userProfile?.displayName ?? user?.email ?? 'User'
-                  )
-                : {
+            ...(payload.notes.trim() ? notePatch : {
                       notes: item.tracking?.notes,
                       lastNoteAt: item.tracking?.lastNoteAt,
                       lastNoteBy: item.tracking?.lastNoteBy,
@@ -357,13 +368,7 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
                 </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
-                <select value={riskFilter} onChange={(e) => setRiskFilter(e.target.value as 'all' | 'high' | 'medium' | 'low')} className="h-11 px-4 rounded-xl border border-slate-100 bg-white text-[10px] font-black uppercase tracking-widest">
-                    <option value="all">All Risks</option>
-                    <option value="high">High Risk</option>
-                    <option value="medium">Medium Risk</option>
-                    <option value="low">Low Risk</option>
-                </select>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                 <select value={providerFilter} onChange={(e) => setProviderFilter(e.target.value)} className="h-11 px-4 rounded-xl border border-slate-100 bg-white text-[10px] font-black uppercase tracking-widest">
                     <option value="all">All Providers</option>
                     {providerOptions.map((provider) => (
@@ -384,7 +389,6 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
                 <Button
                     variant="ghost"
                     onClick={() => {
-                        setRiskFilter('all');
                         setProviderFilter('all');
                         setMinMissedFilter(1);
                         setStatusFilter('open');
@@ -400,17 +404,16 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
                 <div className="p-40 text-center uppercase text-[10px] font-black opacity-10 tracking-[0.3em]">Syncing...</div>
             ) : (
                 <div className="bg-white border border-slate-100 rounded-[2.5rem] shadow-sm overflow-hidden min-h-[500px]">
-                    <div className="overflow-x-auto scrollbar-none">
-                        <table className="w-full text-left border-collapse min-w-[1480px]">
-                            <thead>
-                                <tr className="bg-slate-50 border-b border-slate-100/50">
+                    <div className="overflow-x-auto max-h-[calc(100vh-18rem)] overflow-y-auto">
+                        <table className="w-full text-left border-collapse min-w-[1280px]">
+                            <thead className="sticky top-0 z-10 bg-slate-50">
+                                <tr className="border-b border-slate-100/50">
                                     <th className="p-6 text-[10px] font-black text-slate-300 uppercase tracking-[0.2em] pl-10">
                                         Patient
                                         <span className="block font-normal normal-case text-[9px] text-slate-400 tracking-normal mt-1">
                                             Tap name for contact card
                                         </span>
                                     </th>
-                                    <th className="p-6 text-[10px] font-black text-slate-300 uppercase tracking-[0.2em]">Risk</th>
                                     <th className="p-6 text-[10px] font-black text-slate-300 uppercase tracking-[0.2em] min-w-[140px]">
                                         Why not rebooked
                                     </th>
@@ -433,11 +436,6 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
                                                     ID {item.patientId} • {item.phone}
                                                 </div>
                                             </PatientProfileTrigger>
-                                        </td>
-                                        <td className="p-6">
-                                            <span className={`inline-flex h-8 items-center px-3 rounded-xl border text-[9px] font-black uppercase tracking-widest ${getRiskBadgeClass(item.risk)}`}>
-                                                {item.risk}
-                                            </span>
                                         </td>
                                         <td className="p-6">
                                             <select

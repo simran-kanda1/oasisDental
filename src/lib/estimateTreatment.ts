@@ -138,13 +138,22 @@ export function resolveTreatmentDate(
     ctx.procedureCodes.forEach((c) => relevantCodes.add(c.code));
   }
 
+  const docDate = parseDentrixDate(documentDate);
+  const docFloor = docDate ? startOfDay(docDate) : null;
+
+  const linkedCodes = new Set(ctx.procedureCodes.map((c) => c.code));
   let earliest: Date | null = null;
 
   for (const row of ledgerRows) {
     const ada = adaByProccodeId.get(Number(row.proccodeid));
-    if (!ada || !relevantCodes.has(ada)) continue;
+    if (!ada) continue;
+    const matchesGroup = relevantCodes.has(ada);
+    const matchesLinked = linkedCodes.has(ada);
+    if (!matchesGroup && !matchesLinked) continue;
+
     const procDate = parseDentrixDate(row.procdate ?? row.entrydate);
     if (!procDate) continue;
+    if (docFloor && procDate < docFloor) continue;
     if (Number(row.chartstatus) === CHART_COMPLETED || Number(row.chartstatus) === 105) {
       if (!earliest || procDate < earliest) earliest = procDate;
     }
@@ -154,7 +163,6 @@ export function resolveTreatmentDate(
     return { date: earliest, label: formatDentrixDateKey(earliest.toISOString()), source: 'ledger' };
   }
 
-  const docDate = parseDentrixDate(documentDate);
   return {
     date: docDate,
     label: formatDentrixDateKey(documentDate),
@@ -212,6 +220,19 @@ export function autoCloseCompletedEstimatePatch(by: string): Record<string, unkn
     lastChanged: new Date().toISOString(),
     contactedBy: by,
   };
+}
+
+/** Dedupe estimate rows — one open row per patient + code type group (newest document wins). */
+export function dedupeEstimateRows<T extends { patientId: string; codeTypeFilterId: string; docId: number }>(
+  rows: T[]
+): T[] {
+  const byKey = new Map<string, T>();
+  for (const row of rows) {
+    const key = `${row.patientId}::${row.codeTypeFilterId}`;
+    const prev = byKey.get(key);
+    if (!prev || row.docId > prev.docId) byKey.set(key, row);
+  }
+  return Array.from(byKey.values()).sort((a, b) => b.docId - a.docId);
 }
 
 export function parseActionHistory(raw: unknown): EstimateActionHistoryEntry[] {

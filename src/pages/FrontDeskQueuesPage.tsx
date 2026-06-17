@@ -31,7 +31,9 @@ import type { DentrixAppointmentDoc, DentrixPatientDoc } from '../lib/dentrix';
 import { PatientProfileTrigger } from '../components/PatientProfileTrigger';
 import { QUEUE_ROW_TRACKING_COLLECTION, queueTrackingDocId } from '../lib/queueRowTracking';
 import type { QueueRowTrackingDoc } from '../lib/queueRowTracking';
-import { NOT_REBOOKED_REASON_OPTIONS } from '../lib/notRebookedReasons';
+import { getNotRebookedReasonOptionsForQueue } from '../lib/notRebookedReasons';
+import { APPOINTMENTS_QUERY_LIMIT } from '../lib/appointmentsQuery';
+import { format } from 'date-fns';
 import { Textarea } from '../components/ui/textarea';
 import {
   PATIENT_REFERRAL_LINK_COLLECTIONS,
@@ -151,13 +153,13 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
   }, [appointments]);
 
   const queueBuildCtx = useMemo<QueueBuildContext>(
-    () => ({ procedureCodes, ledgerByPatientId }),
-    [procedureCodes, ledgerByPatientId]
+    () => ({ procedureCodes, ledgerByPatientId, trackingByApptId }),
+    [procedureCodes, ledgerByPatientId, trackingByApptId]
   );
 
   useEffect(() => {
     const unsubA = onSnapshot(
-      query(collection(db, 'appointments'), orderBy('appointment_date', 'desc'), limit(5000)),
+      query(collection(db, 'appointments'), orderBy('appointment_date', 'desc'), limit(APPOINTMENTS_QUERY_LIMIT)),
       (snap) => {
         setAppointments(snap.docs.map((d) => ({ id: d.id, ...d.data() } as DentrixAppointmentDoc)));
         setLoading(false);
@@ -334,6 +336,9 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
     []
   );
 
+  const reasonOptions = getNotRebookedReasonOptionsForQueue(activeId);
+  const showEmergRemove = activeId === 'emerg_follow_up';
+  const showExtractionComplete = activeId === 'extraction';
   const reasonDisabled = (rebooked: boolean | undefined) => activeId === 'no_shows_past_week' && rebooked === true;
 
   const showMainLoader = isNoApptBookedQueue ? false : isReferralQueue ? !referralsReady : loading || ledgerLoading;
@@ -564,9 +569,9 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
             </table>
           </div>
         ) : (
-          <div className="bg-white border border-slate-200 rounded-lg overflow-hidden shadow-sm overflow-x-auto">
+          <div className="bg-white border border-slate-200 rounded-lg overflow-hidden shadow-sm overflow-x-auto max-h-[calc(100vh-14rem)] overflow-y-auto">
             <table className="w-full text-left text-sm min-w-[1100px]">
-              <thead>
+              <thead className="sticky top-0 z-10 bg-slate-50">
                 <tr className="bg-slate-50 border-b border-slate-200 text-[10px] font-black uppercase tracking-widest text-slate-500">
                   <th className="p-3 pl-4">
                     Patient
@@ -586,13 +591,20 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
                   )}
                   <th className="p-3 min-w-[140px]">Why not rebooked</th>
                   <th className="p-3 pr-4 min-w-[200px]">Notes</th>
+                  {(showEmergRemove || showExtractionComplete) && (
+                    <th className="p-3 pr-4 min-w-[100px]">Actions</th>
+                  )}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {queueRows.length === 0 ? (
                   <tr>
                     <td
-                      colSpan={activeId === 'no_shows_past_week' ? 6 : 7}
+                      colSpan={
+                        activeId === 'no_shows_past_week'
+                          ? 6
+                          : 7 + (showEmergRemove || showExtractionComplete ? 1 : 0)
+                      }
                       className="p-12 text-center text-xs text-slate-400 font-bold uppercase tracking-widest"
                     >
                       No rows for this queue / filter
@@ -649,7 +661,7 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
                               })
                             }
                           >
-                            {NOT_REBOOKED_REASON_OPTIONS.map((o) => (
+                            {reasonOptions.map((o) => (
                               <option key={o.value || 'empty'} value={o.value}>
                                 {o.label}
                               </option>
@@ -690,7 +702,46 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
                               <span className="text-[9px] font-bold text-teal-700 uppercase">Saved</span>
                             )}
                           </div>
+                          {tr?.updatedAt && (
+                            <p className="text-[9px] text-slate-400 font-bold mt-1">
+                              Last updated {format(new Date(tr.updatedAt), 'MMM d, yyyy h:mm a')}
+                            </p>
+                          )}
                         </td>
+                        {(showEmergRemove || showExtractionComplete) && (
+                          <td className="p-3 pr-4 align-top">
+                            {showEmergRemove && (
+                              <button
+                                type="button"
+                                className="text-[9px] font-black uppercase text-rose-700 hover:underline disabled:opacity-40"
+                                disabled={savingApptId === row.appointmentFirestoreId}
+                                onClick={() =>
+                                  persistTracking(row.appointmentFirestoreId, row.patientId, {
+                                    removedFromList: true,
+                                    removedAt: new Date().toISOString(),
+                                  })
+                                }
+                              >
+                                Remove
+                              </button>
+                            )}
+                            {showExtractionComplete && (
+                              <button
+                                type="button"
+                                className="text-[9px] font-black uppercase text-teal-700 hover:underline disabled:opacity-40"
+                                disabled={savingApptId === row.appointmentFirestoreId}
+                                onClick={() =>
+                                  persistTracking(row.appointmentFirestoreId, row.patientId, {
+                                    treatmentComplete: true,
+                                    treatmentCompleteAt: new Date().toISOString(),
+                                  })
+                                }
+                              >
+                                Treatment complete
+                              </button>
+                            )}
+                          </td>
+                        )}
                       </tr>
                     );
                   })

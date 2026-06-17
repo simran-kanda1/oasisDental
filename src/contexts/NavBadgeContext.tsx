@@ -17,6 +17,7 @@ import {
   computeFrontDeskQueueCounts,
   frontDeskQueueTotal,
 } from '../lib/navBadgeCounts';
+import { APPOINTMENTS_QUERY_LIMIT } from '../lib/appointmentsQuery';
 import type { DentrixAppointmentDoc, DentrixPatientAppointmentInfoDoc, DentrixPatientDoc } from '../lib/dentrix';
 import type { DentrixProcedureCodeDoc } from '../lib/procedureCodeTypes';
 
@@ -27,6 +28,7 @@ export interface NavBadgeState {
   estimatePredFollowUp: number;
   frontDeskTotal: number;
   frontDeskByQueue: Record<string, number>;
+  badgesReady: boolean;
 }
 
 const defaultState: NavBadgeState = {
@@ -36,6 +38,7 @@ const defaultState: NavBadgeState = {
   estimatePredFollowUp: 0,
   frontDeskTotal: 0,
   frontDeskByQueue: {},
+  badgesReady: false,
 };
 
 const NavBadgeContext = createContext<NavBadgeState>(defaultState);
@@ -50,6 +53,7 @@ export const NavBadgeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [patientInfoById, setPatientInfoById] = useState<Record<string, DentrixPatientAppointmentInfoDoc>>({});
   const [procedureCodes, setProcedureCodes] = useState<DentrixProcedureCodeDoc[]>([]);
   const [frontDeskByQueue, setFrontDeskByQueue] = useState<Record<string, number>>({});
+  const [badgesReady, setBadgesReady] = useState(false);
 
   useEffect(() => {
     return onSnapshot(collection(db, 'wixInquiries'), (snap) => {
@@ -108,7 +112,7 @@ export const NavBadgeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   useEffect(() => {
     const unsubA = onSnapshot(
-      query(collection(db, 'appointments'), orderBy('appointment_date', 'desc'), limit(5000)),
+      query(collection(db, 'appointments'), orderBy('appointment_date', 'desc'), limit(APPOINTMENTS_QUERY_LIMIT)),
       (snap) => setAppointments(snap.docs.map((d) => ({ id: d.id, ...d.data() } as DentrixAppointmentDoc)))
     );
     const unsubP = onSnapshot(collection(db, 'patients'), (snap) => {
@@ -147,7 +151,10 @@ export const NavBadgeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           procedureCodes,
         });
         if (!cancelled) {
-          startTransition(() => setFrontDeskByQueue(counts));
+          startTransition(() => {
+            setFrontDeskByQueue(counts);
+            setBadgesReady(true);
+          });
         }
       };
       if (typeof window.requestIdleCallback === 'function') {
@@ -170,8 +177,9 @@ export const NavBadgeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       estimatePredFollowUp,
       frontDeskByQueue,
       frontDeskTotal: frontDeskQueueTotal(frontDeskByQueue),
+      badgesReady,
     }),
-    [openInquiries, hiddenInquiries, estimatePredApproved, estimatePredFollowUp, frontDeskByQueue]
+    [openInquiries, hiddenInquiries, estimatePredApproved, estimatePredFollowUp, frontDeskByQueue, badgesReady]
   );
 
   return <NavBadgeContext.Provider value={value}>{children}</NavBadgeContext.Provider>;
