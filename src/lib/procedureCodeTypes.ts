@@ -1,5 +1,6 @@
 import { cleanDentrixText } from './dentrix';
 import {
+  claimMatchIsAuthoritative,
   claimPatientId,
   findClaimForDocument,
   resolveClaimProcedureLines,
@@ -97,6 +98,7 @@ export type ProcedureLinkSource =
   | 'insurance_claim'
   | 'ledger_preauth'
   | 'ledger_claim'
+  | 'ledger_hint_code'
   | 'ledger_date'
   | 'ledger_treatment_planned';
 
@@ -289,8 +291,9 @@ function ledgerMatchToLinkSource(
       return 'ledger_preauth';
     case 'claim_id':
       return 'ledger_claim';
-    case 'date_window':
     case 'hint_code':
+      return 'ledger_hint_code';
+    case 'date_window':
       return 'ledger_date';
     case 'treatment_planned':
       return 'ledger_treatment_planned';
@@ -388,6 +391,8 @@ export function buildDocumentProcedureContext(options: {
   procedureCodes: DentrixProcedureCodeDoc[];
   insuredByGuid: Map<string, DentrixInsuredDoc>;
   coverageByPlanId: Map<number, DentrixCoverageTableDoc[]>;
+  /** When true, prefer treatment-planned ledger over weak insurance-claim matches. */
+  estimateSent?: boolean;
 }): DocumentProcedureContext {
   const adaIndex = buildProcedureCodeByAdaMap(options.procedureCodes);
   const adaByProccodeId = new Map<number, string>();
@@ -420,14 +425,39 @@ export function buildDocumentProcedureContext(options: {
     hintCodes: [...fromText, ...fromLog],
   });
 
-  if (matchedClaim) {
-    const fromClaim = resolveCodesFromInsuranceClaim(matchedClaim, adaByProccodeId, adaIndex);
-    if (fromClaim.length) {
-      procedureCodes = fromClaim;
-      linkSource = 'insurance_claim';
-      claimId = Number(matchedClaim.claimId ?? matchedClaim.claim_id ?? matchedClaim.id) || null;
-      preauthId = Number(matchedClaim.preauthid ?? matchedClaim.preauth_id) || null;
+  const tryClaimLinkage = (): boolean => {
+    if (!matchedClaim || !claimMatchIsAuthoritative(matchedClaim, idCandidates, [...fromText, ...fromLog])) {
+      return false;
     }
+    const fromClaim = resolveCodesFromInsuranceClaim(matchedClaim, adaByProccodeId, adaIndex);
+    if (!fromClaim.length) return false;
+    const claimCodeTypes = resolveCodeTypesForCodes(
+      fromClaim.map((c) => c.code),
+      { planId: null, coverageByPlanId: options.coverageByPlanId }
+    );
+    if (!hasKnownEstimateCodeType(claimCodeTypes)) return false;
+    procedureCodes = fromClaim;
+    linkSource = 'insurance_claim';
+    claimId = Number(matchedClaim.claimId ?? matchedClaim.claim_id ?? matchedClaim.id) || null;
+    preauthId = Number(matchedClaim.preauthid ?? matchedClaim.preauth_id) || null;
+    return true;
+  };
+
+  if (options.estimateSent && options.ledgerRows?.length) {
+    const fromPlanned = resolveTreatmentPlannedLedgerCodes(
+      options.patientId,
+      options.ledgerRows,
+      adaByProccodeId,
+      adaIndex
+    );
+    if (fromPlanned.length) {
+      procedureCodes = fromPlanned;
+      linkSource = 'ledger_treatment_planned';
+    }
+  }
+
+  if (!procedureCodes.length) {
+    tryClaimLinkage();
   }
 
   if (!procedureCodes.length && options.ledgerRows?.length) {
@@ -436,7 +466,7 @@ export function buildDocumentProcedureContext(options: {
       documentDescript: options.descript,
       documentDate: options.documentDate,
       ledgerRows: options.ledgerRows,
-      hintCodes: [...fromText, ...fromLog],
+      hintCodes: fromText.length ? fromText : fromLog,
       adaByProccodeId,
     });
     if (ledgerMatch.lines.length) {
@@ -484,4 +514,42 @@ export function buildDocumentProcedureContext(options: {
 export function primaryCodeTypeFilterId(ctx: DocumentProcedureContext): string {
   if (!ctx.codeTypes.length) return ESTIMATE_CODE_TYPE_FILTER_UNCATEGORIZED;
   return ctx.primaryCodeType?.groupId ?? ESTIMATE_CODE_TYPE_FILTER_UNCATEGORIZED;
+}
+
+const KNOWN_ESTIMATE_GROUP_IDS = new Set(ESTIMATE_CODE_TYPE_GROUPS.map((g) => g.id));
+
+export function hasKnownEstimateCodeType(codeTypes: CodeTypeMatch[]): boolean {
+  return codeTypes.some((t) => KNOWN_ESTIMATE_GROUP_IDS.has(t.groupId));
+}
+
+/** True when the estimate row can show a code type or procedure codes (not blank "—"). */
+export function hasDisplayableEstimateCodeType(ctx: DocumentProcedureContext): boolean {
+  if (ctx.primaryCodeType) return true;
+  return ctx.procedureCodes.length > 0;
+}
+
+function resolveTreatmentPlannedLedgerCodes(
+  patientId: string,
+  ledgerRows: DentrixLedgerTransactionDoc[],
+  adaByProccodeId: Map<number, string>,
+  adaIndex: Map<string, DentrixProcedureCodeDoc>
+): ResolvedProcedureCode[] {
+  const patid = Number(patientId);
+  if (!Number.isFinite(patid)) return [];
+  const CHART_TREATMENT_PLANNED = 105;
+  const lines = ledgerRows.filter(
+    (row) => Number(row.patid) === patid && Number(row.chartstatus) === CHART_TREATMENT_PLANNED
+  );
+  if (!lines.length) return [];
+  return resolveCodesFromLedgerLines(
+    lines.map((row) => ({
+      proccodeid: Number(row.proccodeid),
+      chartstatus: Number(row.chartstatus),
+      procdate: String(row.procdate ?? row.entrydate ?? ''),
+      amt: Number(row.amt ?? 0),
+      primaryInsurancePaid: Number(row.amtpriminspaid ?? 0) || undefined,
+    })),
+    adaByProccodeId,
+    adaIndex
+  );
 }

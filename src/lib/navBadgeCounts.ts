@@ -45,7 +45,7 @@ export function computeFrontDeskQueueCounts(
     [NO_APPT_BOOKED_QUEUE_ID]: countNoApptBookedQueue(patientInfoById, patientsById),
   };
 
-  const sharedIndexes = buildQueueIndexes(appointments, ctx);
+  const sharedIndexes = buildQueueIndexes(appointments, { ...ctx, patientInfoById }, patientsById);
   for (const q of [...FRONT_DESK_QUEUE_DEFS, ...STANDALONE_FRONT_DESK_QUEUE_DEFS]) {
     if (q.id === 'referral_doctor_followup') continue;
     counts[q.id] = buildQueueRows(
@@ -56,7 +56,7 @@ export function computeFrontDeskQueueCounts(
       now,
       'all',
       'all',
-      ctx,
+      { ...ctx, patientInfoById },
       sharedIndexes
     ).length;
   }

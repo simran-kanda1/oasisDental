@@ -225,20 +225,6 @@ export function resolveLedgerProceduresForDocument(input: ResolveLedgerProcedure
     }
   }
 
-  if (preauthGroups.length && docDate) {
-    const ranked = [...preauthGroups].sort((a, b) => scorePreauthGroup(a, docDate) - scorePreauthGroup(b, docDate));
-    const best = ranked[0];
-    const bestDays = scorePreauthGroup(best, docDate);
-    if (bestDays <= DOCUMENT_LINK_DAYS) {
-      return {
-        lines: preferLinesForDocument(best.lines, docDate),
-        preauthid: best.preauthid,
-        claimid: best.claimid || null,
-        matchReason: 'date_window',
-      };
-    }
-  }
-
   const treatmentPlanned = allLines.filter((l) => l.chartstatus === CHART_TREATMENT_PLANNED);
   if (treatmentPlanned.length) {
     return {
@@ -255,10 +241,12 @@ export function resolveLedgerProceduresForDocument(input: ResolveLedgerProcedure
 function preferLinesForDocument(lines: LedgerProcedureLine[], docDate: Date | null): LedgerProcedureLine[] {
   const planned = lines.filter((l) => l.chartstatus === CHART_TREATMENT_PLANNED);
   const pool = planned.length ? planned : lines;
+  const poolProccodeIds = new Set(pool.map((l) => l.proccodeid));
   if (!docDate) return dedupeLines(pool);
 
   const completedNear = lines.filter((l) => {
     if (l.chartstatus !== CHART_COMPLETED) return false;
+    if (!poolProccodeIds.has(l.proccodeid)) return false;
     return daysBetween(docDate, parseDentrixDate(l.procdate)) <= DOCUMENT_LINK_DAYS;
   });
   return dedupeLines([...pool, ...completedNear]);

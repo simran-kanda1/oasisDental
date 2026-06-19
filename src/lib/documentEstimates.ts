@@ -1,8 +1,24 @@
-import { collection, limit, orderBy, query, type Firestore } from 'firebase/firestore';
+import {
+  collection,
+  getDocs,
+  limit,
+  orderBy,
+  query,
+  startAfter,
+  type DocumentData,
+  type Firestore,
+  type QueryDocumentSnapshot,
+} from 'firebase/firestore';
 import { cleanDentrixText, formatDentrixDateKey, formatPatientFullName, parseDentrixDate, type DentrixPatientDoc } from './dentrix';
 
-/** Cap Firestore reads — full `documents` collection is 70k+ rows in production. */
-export const ESTIMATE_DOCUMENTS_QUERY_LIMIT = 3000;
+/** Firestore hard cap per query. */
+export const FIRESTORE_QUERY_LIMIT_MAX = 10000;
+
+/** Default documents to load on the estimates page (single query when possible). */
+export const ESTIMATE_DOCUMENTS_QUERY_LIMIT = 5000;
+
+/** Lighter fetch for sidebar badge counts — deferred off the critical path. */
+export const ESTIMATE_DOCUMENTS_BADGE_LIMIT = 4000;
 
 import {
   DEFAULT_ESTIMATE_AGE_BUCKET,
@@ -20,11 +36,59 @@ export type EstimateDocumentLookback = EstimateAgeBucket;
 export const ESTIMATE_DOCUMENT_LOOKBACK_OPTIONS = ESTIMATE_AGE_BUCKET_OPTIONS;
 export const DEFAULT_ESTIMATE_DOCUMENT_LOOKBACK = DEFAULT_ESTIMATE_AGE_BUCKET;
 
-export function estimateDocumentsFirestoreQuery(db: Firestore, _ageBucket: EstimateAgeBucket = 'all') {
+export function estimateDocumentsFirestoreQuery(
+  db: Firestore,
+  _ageBucket: EstimateAgeBucket = 'all',
+  pageSize = FIRESTORE_QUERY_LIMIT_MAX
+) {
   const coll = collection(db, 'documents');
   // No server-side date filter — createdate is string or Timestamp depending on sync row.
   // Fetch the newest batch, then apply the 15-month window in isDocumentWithinLookback.
-  return query(coll, orderBy('createdate', 'desc'), limit(ESTIMATE_DOCUMENTS_QUERY_LIMIT));
+  return query(coll, orderBy('createdate', 'desc'), limit(Math.min(pageSize, FIRESTORE_QUERY_LIMIT_MAX)));
+}
+
+/** Page through newest documents — stops once the 15-month window is exhausted. */
+export async function fetchEstimateDocuments(
+  db: Firestore,
+  maxDocs = ESTIMATE_DOCUMENTS_QUERY_LIMIT,
+  options?: { stopAtLookback?: boolean }
+): Promise<DentrixDocumentDoc[]> {
+  const coll = collection(db, 'documents');
+  const rows: DentrixDocumentDoc[] = [];
+  let lastDoc: DocumentSnapshot | null = null;
+  const since = options?.stopAtLookback !== false ? estimateDocumentFetchSince() : null;
+
+  type DocumentSnapshot = QueryDocumentSnapshot<DocumentData>;
+
+  const isBeforeLookback = (row: DentrixDocumentDoc): boolean => {
+    if (!since) return false;
+    const docDate =
+      parseDentrixDate(row.createdate) ?? parseDentrixDate(row.modifiedtimestamp);
+    return !!docDate && docDate < since;
+  };
+
+  while (rows.length < maxDocs) {
+    const batchSize = Math.min(FIRESTORE_QUERY_LIMIT_MAX, maxDocs - rows.length);
+    let snap;
+    if (lastDoc) {
+      snap = await getDocs(
+        query(coll, orderBy('createdate', 'desc'), startAfter(lastDoc), limit(batchSize))
+      );
+    } else {
+      snap = await getDocs(query(coll, orderBy('createdate', 'desc'), limit(batchSize)));
+    }
+    if (snap.empty) break;
+
+    for (const d of snap.docs) {
+      const row = { id: d.id, ...d.data() } as DentrixDocumentDoc;
+      if (isBeforeLookback(row)) return rows;
+      rows.push(row);
+    }
+    lastDoc = snap.docs[snap.docs.length - 1] ?? null;
+    if (snap.size < batchSize) break;
+  }
+
+  return rows;
 }
 
 /** Firestore window — exclusive aging buckets are applied client-side on treatment date. */
@@ -105,16 +169,33 @@ export interface DocumentEstimateWorkItem {
 
 /**
  * Classify Document Center description for estimate / predet workflow.
- * Order matters: "explanation of benefits" before bare "explanation".
+ * Order matters: acknowledgements and predetermination EOB before generic EOB / explanation.
  */
+export function isPredeterminationAcknowledgement(descript: string): boolean {
+  const d = descript.trim().toLowerCase();
+  if (d.includes('explanation')) return false;
+  return (
+    d.includes('pre-determination acknowledgment') ||
+    d.includes('pre-determination acknowledgement') ||
+    d.includes('predetermination acknowledgment') ||
+    d.includes('predetermination acknowledgement')
+  );
+}
+
+export function isPredeterminationExplanationOfBenefits(descript: string): boolean {
+  const d = descript.trim().toLowerCase();
+  return (
+    d.includes('predetermination') &&
+    (d.includes('explanation of benefits') || d.includes('explanation of benefit'))
+  );
+}
+
 export function classifyDocumentEstimateStatus(descript: string): DocumentEstimateWorkflowStatus {
   const d = descript.trim().toLowerCase();
   if (!d) return 'unclassified';
+  if (isPredeterminationAcknowledgement(descript)) return 'needs_follow_up';
+  if (isPredeterminationExplanationOfBenefits(descript)) return 'covered_eob';
   if (d.includes('explanation of benefits') || d.includes('explanation of benefit')) return 'covered_eob';
-  // Pre-d acknowledgments → follow-up tab (not EOB "explanation" docs)
-  if (d.includes('pre-determination acknowledgment') || d.includes('pre-determination acknowledgement')) {
-    return 'needs_follow_up';
-  }
   if (d.includes('explanation')) return 'book_right_away';
   return 'unclassified';
 }

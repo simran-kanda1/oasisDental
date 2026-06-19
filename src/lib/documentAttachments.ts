@@ -4,6 +4,7 @@ import type { DentrixPatientDoc } from './dentrix';
 import type { DentrixDocumentAttachmentDoc } from './documentEstimates';
 
 const IN_BATCH = 30;
+const PARALLEL_BATCHES = 6;
 
 /** Load patient attachments only for the estimate document ids already in memory. */
 export async function fetchAttachmentsForDocIds(
@@ -14,12 +15,22 @@ export async function fetchAttachmentsForDocIds(
   if (ids.length === 0) return [];
 
   const out: DentrixDocumentAttachmentDoc[] = [];
-  for (let i = 0; i < ids.length; i += IN_BATCH) {
-    const chunk = ids.slice(i, i + IN_BATCH);
-    const snap = await getDocs(query(collection(db, 'document_attachments'), where('docid', 'in', chunk)));
-    snap.docs.forEach((d) => {
-      out.push({ id: d.id, ...d.data() } as DentrixDocumentAttachmentDoc);
-    });
+  for (let i = 0; i < ids.length; i += IN_BATCH * PARALLEL_BATCHES) {
+    const rounds = [];
+    for (let j = 0; j < PARALLEL_BATCHES; j += 1) {
+      const chunk = ids.slice(i + j * IN_BATCH, i + (j + 1) * IN_BATCH);
+      if (chunk.length) rounds.push(chunk);
+    }
+    await Promise.all(
+      rounds.map(async (chunk) => {
+        const snap = await getDocs(
+          query(collection(db, 'document_attachments'), where('docid', 'in', chunk))
+        );
+        snap.docs.forEach((d) => {
+          out.push({ id: d.id, ...d.data() } as DentrixDocumentAttachmentDoc);
+        });
+      })
+    );
   }
   return out;
 }

@@ -117,7 +117,7 @@ const DashboardPage: React.FC = () => {
                     const r = row as Record<string, unknown>;
                     if (r.phoneMatchExcluded === true) return false;
                     const status = String(row.status ?? '').toLowerCase();
-                    return status === 'responded' || status === 'converted';
+                    return status === 'responded' || status === 'converted' || status === 'closed';
                 })
                 .map((row) => {
                     const submitted = typeof row.submittedAt === 'string' ? parseISO(row.submittedAt) : null;

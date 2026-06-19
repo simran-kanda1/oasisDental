@@ -4,7 +4,7 @@ import {
     LayoutDashboard, Calendar, MessageSquare,
     Menu, X, ChevronRight, LogOut, Bell,
     ShieldCheck, ListTodo, UsersRound, LayoutList, Settings,
-    Siren, UserPlus, Share2, HeartPulse,
+    Siren, UserPlus, Share2, HeartPulse, Loader2,
 } from 'lucide-react';
 import { GlobalPatientSearch } from '../GlobalPatientSearch';
 import { Tooth } from '../ui/icons';
@@ -53,7 +53,22 @@ const navItems: NavItem[] = [
     { id: 'inquiries', label: 'Inquiries', icon: MessageSquare, badge: 'inquiries' },
 ];
 
-function NavCountBadge({ count, tone = 'teal' }: { count: number; tone?: 'teal' | 'amber' }) {
+function NavCountBadge({
+    count,
+    tone = 'teal',
+    loading = false,
+}: {
+    count: number;
+    tone?: 'teal' | 'amber';
+    loading?: boolean;
+}) {
+    if (loading) {
+        return (
+            <span className="ml-auto inline-flex min-w-[1.25rem] justify-center px-1.5 py-0.5">
+                <Loader2 className="h-3 w-3 animate-spin text-slate-400" aria-label="Loading" />
+            </span>
+        );
+    }
     if (count <= 0) return null;
     return (
         <span
@@ -140,6 +155,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeSection, activeQueueId, 
                                     <NavCountBadge
                                         count={navBadgeCount(item)}
                                         tone={item.badge === 'estimates' ? 'amber' : 'teal'}
+                                        loading={item.badge === 'estimates' && !badges.estimatesReady}
                                     />
                                 </>
                             )}

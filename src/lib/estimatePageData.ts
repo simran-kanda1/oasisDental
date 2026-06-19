@@ -1,4 +1,4 @@
-import { collection, doc, getDoc, getDocs, query, where } from 'firebase/firestore';
+import { collection, documentId, getDocs, query, where } from 'firebase/firestore';
 import type { Firestore } from 'firebase/firestore';
 import type { DentrixPatientAppointmentInfoDoc, DentrixAppointmentDoc } from './dentrix';
 import type { DentrixInsuranceClaimDoc } from './insuranceClaimEstimates';
@@ -6,6 +6,7 @@ import { formatDentrixDateKey } from './dentrix';
 import type { DentrixInsuredDoc } from './procedureCodeTypes';
 
 const IN_BATCH = 30;
+const PARALLEL_BATCHES = 6;
 
 export async function fetchFollowUpsForDocIds(
   db: Firestore,
@@ -14,12 +15,20 @@ export async function fetchFollowUpsForDocIds(
   const ids = [...new Set(followUpDocIds.filter(Boolean))];
   const map: Record<string, Record<string, unknown>> = {};
 
-  for (let i = 0; i < ids.length; i += IN_BATCH) {
-    const chunk = ids.slice(i, i + IN_BATCH);
+  for (let i = 0; i < ids.length; i += IN_BATCH * PARALLEL_BATCHES) {
+    const rounds = [];
+    for (let j = 0; j < PARALLEL_BATCHES; j += 1) {
+      const chunk = ids.slice(i + j * IN_BATCH, i + (j + 1) * IN_BATCH);
+      if (chunk.length) rounds.push(chunk);
+    }
     await Promise.all(
-      chunk.map(async (id) => {
-        const snap = await getDoc(doc(db, 'followUps', id));
-        if (snap.exists()) map[id] = snap.data() as Record<string, unknown>;
+      rounds.map(async (chunk) => {
+        const snap = await getDocs(
+          query(collection(db, 'followUps'), where(documentId(), 'in', chunk))
+        );
+        snap.docs.forEach((d) => {
+          map[d.id] = d.data() as Record<string, unknown>;
+        });
       })
     );
   }

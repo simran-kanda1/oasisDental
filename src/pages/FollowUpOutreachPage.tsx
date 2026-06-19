@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
+import React, { useMemo, useState, useEffect, useRef, useCallback, useDeferredValue, startTransition } from 'react';
 import { collection, doc, onSnapshot, setDoc, query, orderBy, limit } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { Button } from '../components/ui/button';
@@ -19,6 +19,7 @@ import {
   buildInsuredByPatientGuidMap,
   formatCodeTypeLabel,
   formatProcedureCodesSummary,
+  hasDisplayableEstimateCodeType,
   primaryCodeTypeFilterId,
   type DentrixCoverageTableDoc,
   type DentrixInsuredDoc,
@@ -31,28 +32,28 @@ import {
   autoCloseCompletedEstimatePatch,
   filterProcedureContextByGroup,
   isSnoozed,
-  isTrackedTreatmentCompleted,
   matchesEstimateAgeBucket,
   monthsSinceDate,
   parseActionHistory,
   resolveTreatmentDate,
   dedupeEstimateRows,
+  isEstimateCompleteOnLedger,
   type EstimateAgeBucket,
   type EstimateFollowUpAction,
 } from '../lib/estimateTreatment';
 import type { DentrixLedgerTransactionDoc } from '../lib/ledgerTransactions';
 import { parseDentrixDate } from '../lib/dentrix';
 import { FOLLOW_UP_QUEUE_OUTREACH, isOpenOutreachItem } from '../lib/followUpQueues';
-import { Loader2 } from 'lucide-react';
+import { Loader2, Search } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { PatientProfileTrigger } from '../components/PatientProfileTrigger';
 import {
   buildDocIdToPatientIdMap,
   buildDocumentEstimateWorkItems,
   filterEstimateCandidateDocuments,
+  fetchEstimateDocuments,
   DEFAULT_ESTIMATE_AGE_BUCKET,
   ESTIMATE_AGE_BUCKET_OPTIONS,
-  estimateDocumentsFirestoreQuery,
   isPredApprovedDocumentStatus,
   isPredFollowUpDocumentStatus,
   workflowStatusBadgeClass,
@@ -87,6 +88,34 @@ export interface FollowUpOutreachPageProps {
 }
 
 const ESTIMATE_PAGE_SIZE = 40;
+
+const EMPTY_SECTION_SEARCH: Record<EstimateFollowUpHubTab, string> = {
+  pred_approved: '',
+  pred_follow_up: '',
+};
+
+function rowMatchesEstimateSearch(row: DocumentEstimateRow, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  const codeSummary = formatProcedureCodesSummary(row.procedureContext.procedureCodes).toLowerCase();
+  const typeLabels = row.procedureContext.codeTypes.map((t) => t.label).join(' ').toLowerCase();
+  const haystack = [
+    row.patientName,
+    row.descript,
+    row.patientId,
+    row.nextApptInSystem,
+    row.treatmentDateLabel ?? '',
+    row.createdLabel ?? '',
+    row.estimateSentLabel ?? '',
+    row.outcome ?? '',
+    row.notes ?? '',
+    codeSummary,
+    typeLabels,
+  ]
+    .join(' ')
+    .toLowerCase();
+  return haystack.includes(q);
+}
 
 const OUTREACH_TOGGLE_ACTIONS: EstimateFollowUpAction[] = [
   'no_answer',
@@ -148,8 +177,9 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
   const [ledgerLoading, setLedgerLoading] = useState(false);
   const [coverageByPlanId, setCoverageByPlanId] = useState<Map<number, DentrixCoverageTableDoc[]>>(new Map());
   const [loading, setLoading] = useState(true);
+  const [attachmentsLoading, setAttachmentsLoading] = useState(true);
   const [documentsLoadError, setDocumentsLoadError] = useState<string | null>(null);
-  const [search, setSearch] = useState('');
+  const [searchByTab, setSearchByTab] = useState<Record<EstimateFollowUpHubTab, string>>(EMPTY_SECTION_SEARCH);
   const [codeTypeFilter, setCodeTypeFilter] = useState(ESTIMATE_CODE_TYPE_FILTER_ALL);
   const [ageBucket, setAgeBucket] = useState<EstimateAgeBucket>(DEFAULT_ESTIMATE_AGE_BUCKET);
   const [groupByCodeType, setGroupByCodeType] = useState(false);
@@ -158,11 +188,9 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
   const [bookedDateDraft, setBookedDateDraft] = useState<Record<string, string>>({});
   const [snoozeDraft, setSnoozeDraft] = useState<Record<string, string>>({});
   const [saveNotice, setSaveNotice] = useState<{ id: string; message: string } | null>(null);
-  const [visibleCount, setVisibleCount] = useState(ESTIMATE_PAGE_SIZE);
-  const [loadingMore, setLoadingMore] = useState(false);
+  const [page, setPage] = useState(1);
   const [pendingRemovalIds, setPendingRemovalIds] = useState<Set<string>>(() => new Set());
   const [undoClose, setUndoClose] = useState<UndoCloseState | null>(null);
-  const loadMoreSentinelRef = useRef<HTMLTableRowElement | null>(null);
   const undoTimerRef = useRef<number | null>(null);
   const autoClosedLedgerRef = useRef(new Set<string>());
 
@@ -189,33 +217,41 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
   useEffect(() => {
     setLoading(true);
     let pending = 2;
+    let cancelled = false;
     const done = () => {
       pending -= 1;
-      if (pending <= 0) setLoading(false);
+      if (pending <= 0 && !cancelled) setLoading(false);
     };
 
-    const documentsQuery = estimateDocumentsFirestoreQuery(db, ageBucket);
-    const unsubDocs = onSnapshot(
-      documentsQuery,
-      (snap) => {
-        setDocuments(snap.docs.map((d) => ({ id: d.id, ...d.data() } as DentrixDocumentDoc)));
-        setDocumentsLoadError(null);
+    void fetchEstimateDocuments(db, undefined, { stopAtLookback: true })
+      .then((rows) => {
+        if (!cancelled) {
+          startTransition(() => {
+            setDocuments(rows);
+            setDocumentsLoadError(null);
+          });
+        }
+      })
+      .catch((err) => {
+        console.error('documents fetch failed', err);
+        if (!cancelled) {
+          setDocuments([]);
+          setDocumentsLoadError(err instanceof Error ? err.message : 'Could not load documents from Firestore.');
+        }
+      })
+      .finally(() => {
         done();
-      },
-      (err) => {
-        console.error('documents listener failed', err);
-        setDocuments([]);
-        setDocumentsLoadError(err instanceof Error ? err.message : 'Could not load documents from Firestore.');
-        done();
-      }
-    );
+      });
+
     const unsubProcCodes = onSnapshot(collection(db, 'procedure_codes'), (snap) => {
-      setProcedureCodes(snap.docs.map((d) => ({ id: d.id, ...d.data() } as DentrixProcedureCodeDoc)));
+      if (!cancelled) {
+        setProcedureCodes(snap.docs.map((d) => ({ id: d.id, ...d.data() } as DentrixProcedureCodeDoc)));
+      }
       done();
     });
 
     return () => {
-      unsubDocs();
+      cancelled = true;
       unsubProcCodes();
     };
   }, [ageBucket]);
@@ -227,11 +263,12 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
       .filter((id) => Number.isFinite(id) && id > 0);
     if (docIds.length === 0) {
       setAttachments([]);
-      setPatientsById({});
+      setAttachmentsLoading(false);
       return;
     }
 
     let cancelled = false;
+    setAttachmentsLoading(true);
     void fetchAttachmentsForDocIds(db, docIds)
       .then((rows) => {
         if (!cancelled) setAttachments(rows);
@@ -239,6 +276,9 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
       .catch((err) => {
         console.error('estimate attachment fetch failed', err);
         if (!cancelled) setAttachments([]);
+      })
+      .finally(() => {
+        if (!cancelled) setAttachmentsLoading(false);
       });
     return () => {
       cancelled = true;
@@ -307,10 +347,12 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
     ])
       .then(([followUps, claims, patientInfo, insured]) => {
         if (cancelled) return;
-        setFollowUpByDocId(followUps);
-        setInsuranceClaims(claims);
-        setPatientInfoById(patientInfo);
-        setInsuredRows(insured);
+        startTransition(() => {
+          setFollowUpByDocId(followUps);
+          setInsuranceClaims(claims);
+          setPatientInfoById(patientInfo);
+          setInsuredRows(insured);
+        });
       })
       .catch((err) => {
         console.error('estimate supplemental load failed', err);
@@ -320,6 +362,31 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
       cancelled = true;
     };
   }, [documentWorkItems, patientsById]);
+
+  const candidateDocumentCount = useMemo(
+    () => filterEstimateCandidateDocuments(documents, 'all').length,
+    [documents]
+  );
+
+  const isPageLoading = loading || (candidateDocumentCount > 0 && attachmentsLoading);
+
+  const deferredWorkItems = useDeferredValue(documentWorkItems);
+  const deferredFollowUpByDocId = useDeferredValue(followUpByDocId);
+  const isRowsStale =
+    deferredWorkItems !== documentWorkItems || deferredFollowUpByDocId !== followUpByDocId;
+
+  const treatmentDateLedgerHint = (row: DocumentEstimateRow): string => {
+    if (row.procedureContext.linkSource === 'ledger_preauth') return 'Pre-auth · from ledger';
+    if (
+      row.treatmentDateSource === 'ledger' &&
+      (row.procedureContext.primaryCodeType?.requiresPreauth ||
+        row.procedureContext.codeTypes.some((t) => t.requiresPreauth))
+    ) {
+      return 'Preauth · from ledger';
+    }
+    if (row.documentStatus === 'needs_follow_up') return 'Pre-d ack · from ledger';
+    return 'From ledger';
+  };
 
   const ageBucketLabel =
     ESTIMATE_AGE_BUCKET_OPTIONS.find((o) => o.id === ageBucket)?.label ?? 'All dates';
@@ -334,8 +401,11 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
     [appointments]
   );
 
-  const openDocumentItem = (item: (typeof documentWorkItems)[0]) => {
-    const fu = followUpByDocId[item.followUpDocId];
+  const openDocumentItem = (
+    item: (typeof documentWorkItems)[0],
+    followUps: Record<string, Record<string, unknown>> = followUpByDocId
+  ) => {
+    const fu = followUps[item.followUpDocId];
     if (fu && isSnoozed(fu.snoozeUntil)) return false;
     if (!fu) return true;
     if (item.workflowStatus === 'covered_eob') return fu.documentCoveredNoted !== true;
@@ -362,6 +432,7 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
         procedureCodes,
         insuredByGuid,
         coverageByPlanId,
+        estimateSent: !!estimateSentByPatientId[d.patientId],
       });
       const activeGroupId =
         filterGroupId ??
@@ -369,12 +440,21 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
           ? codeTypeFilter
           : primaryCodeTypeFilterId(fullContext));
       const procedureContext = filterProcedureContextByGroup(fullContext, activeGroupId);
-      return isTrackedTreatmentCompleted(
+      const treatment = resolveTreatmentDate(
         procedureContext,
+        d.createdate,
+        activeGroupId,
+        patientLedger,
+        adaByProccodeId
+      );
+      return isEstimateCompleteOnLedger(
+        fullContext,
         activeGroupId,
         patientLedger,
         adaByProccodeId,
-        parseDentrixDate(d.createdate)
+        parseDentrixDate(d.createdate),
+        treatment.source,
+        { documentStatus: d.workflowStatus }
       );
     },
     [
@@ -385,11 +465,15 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
       coverageByPlanId,
       codeTypeFilter,
       adaByProccodeId,
+      estimateSentByPatientId,
     ]
   );
 
-  const mapDocumentRow = (d: (typeof documentWorkItems)[0]): DocumentEstimateRow | null => {
-    const fu = followUpByDocId[d.followUpDocId];
+  const mapDocumentRow = (
+    d: (typeof documentWorkItems)[0],
+    followUps: Record<string, Record<string, unknown>> = followUpByDocId
+  ): DocumentEstimateRow | null => {
+    const fu = followUps[d.followUpDocId];
     const patientLedger = ledgerByPatientId.get(Number(d.patientId)) ?? [];
     const fullContext = buildDocumentProcedureContext({
       descript: d.descript,
@@ -401,6 +485,7 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
       procedureCodes,
       insuredByGuid,
       coverageByPlanId,
+      estimateSent: !!estimateSentByPatientId[d.patientId],
     });
 
     const activeGroupId =
@@ -452,19 +537,20 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
 
   const predApprovedRows = useMemo<DocumentEstimateRow[]>(() => {
     return dedupeEstimateRows(
-      documentWorkItems
+      deferredWorkItems
       .filter((d) => isPredApprovedDocumentStatus(d.workflowStatus))
-      .filter(openDocumentItem)
+      .filter((d) => openDocumentItem(d, deferredFollowUpByDocId))
       .filter((d) => {
         const p = patientsById[d.patientId];
         return !p || isActiveDentrixPatient(p);
       })
-      .map(mapDocumentRow)
+      .map((d) => mapDocumentRow(d, deferredFollowUpByDocId))
       .filter((r): r is DocumentEstimateRow => !!r)
+      .filter((r) => hasDisplayableEstimateCodeType(r.procedureContext))
     );
   }, [
-    documentWorkItems,
-    followUpByDocId,
+    deferredWorkItems,
+    deferredFollowUpByDocId,
     patientsById,
     nextAppointmentByPatientId,
     procedureCodes,
@@ -480,19 +566,19 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
 
   const predFollowUpRows = useMemo<DocumentEstimateRow[]>(() => {
     return dedupeEstimateRows(
-      documentWorkItems
+      deferredWorkItems
       .filter((d) => isPredFollowUpDocumentStatus(d.workflowStatus))
-      .filter(openDocumentItem)
+      .filter((d) => openDocumentItem(d, deferredFollowUpByDocId))
       .filter((d) => {
         const p = patientsById[d.patientId];
         return !p || isActiveDentrixPatient(p);
       })
-      .map(mapDocumentRow)
+      .map((d) => mapDocumentRow(d, deferredFollowUpByDocId))
       .filter((r): r is DocumentEstimateRow => !!r)
     );
   }, [
-    documentWorkItems,
-    followUpByDocId,
+    deferredWorkItems,
+    deferredFollowUpByDocId,
     patientsById,
     nextAppointmentByPatientId,
     procedureCodes,
@@ -506,21 +592,6 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
     estimateSentByPatientId,
   ]);
 
-  const matchesSearch = useCallback((row: DocumentEstimateRow) => {
-    const q = search.trim().toLowerCase();
-    if (!q) return true;
-    const codeSummary = formatProcedureCodesSummary(row.procedureContext.procedureCodes).toLowerCase();
-    const typeLabels = row.procedureContext.codeTypes.map((t) => t.label).join(' ').toLowerCase();
-    return (
-      row.patientName.toLowerCase().includes(q) ||
-      row.descript.toLowerCase().includes(q) ||
-      row.patientId.toLowerCase().includes(q) ||
-      row.nextApptInSystem.toLowerCase().includes(q) ||
-      codeSummary.includes(q) ||
-      typeLabels.includes(q)
-    );
-  }, [search]);
-
   const matchesCodeTypeFilter = useCallback((row: DocumentEstimateRow) => {
     if (codeTypeFilter === ESTIMATE_CODE_TYPE_FILTER_ALL) return true;
     if (codeTypeFilter === ESTIMATE_CODE_TYPE_FILTER_UNCATEGORIZED) {
@@ -532,33 +603,46 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
   const filteredApproved = useMemo(
     () =>
       predApprovedRows
-        .filter(matchesSearch)
+        .filter((r) => rowMatchesEstimateSearch(r, searchByTab.pred_approved))
         .filter(matchesCodeTypeFilter)
         .filter((r) => !pendingRemovalIds.has(r.followUpDocId)),
-    [predApprovedRows, matchesSearch, matchesCodeTypeFilter, pendingRemovalIds]
+    [predApprovedRows, searchByTab.pred_approved, matchesCodeTypeFilter, pendingRemovalIds]
   );
 
   const filteredFollowUp = useMemo(
     () =>
       predFollowUpRows
-        .filter(matchesSearch)
+        .filter((r) => rowMatchesEstimateSearch(r, searchByTab.pred_follow_up))
         .filter(matchesCodeTypeFilter)
         .filter((r) => !pendingRemovalIds.has(r.followUpDocId)),
-    [predFollowUpRows, matchesSearch, matchesCodeTypeFilter, pendingRemovalIds]
+    [predFollowUpRows, searchByTab.pred_follow_up, matchesCodeTypeFilter, pendingRemovalIds]
   );
 
   const displayedTabRows = tab === 'pred_approved' ? filteredApproved : filteredFollowUp;
+  const activeTabSearch = searchByTab[tab];
+  const activeTabSearchTrimmed = activeTabSearch.trim();
+  const activeTabRowsBeforeSearch = tab === 'pred_approved' ? predApprovedRows : predFollowUpRows;
 
   useEffect(() => {
-    setVisibleCount(ESTIMATE_PAGE_SIZE);
-  }, [tab, search, codeTypeFilter, ageBucket, groupByCodeType]);
+    setPage(1);
+  }, [tab, activeTabSearch, codeTypeFilter, ageBucket, groupByCodeType]);
 
+  const totalDisplayedRows = displayedTabRows.length;
+  const totalPages = Math.max(1, Math.ceil(totalDisplayedRows / ESTIMATE_PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const pageStartIndex = (safePage - 1) * ESTIMATE_PAGE_SIZE;
   const visibleRows = useMemo(
-    () => displayedTabRows.slice(0, visibleCount),
-    [displayedTabRows, visibleCount]
+    () => displayedTabRows.slice(pageStartIndex, pageStartIndex + ESTIMATE_PAGE_SIZE),
+    [displayedTabRows, pageStartIndex]
   );
 
-  const hasMoreRows = visibleCount < displayedTabRows.length;
+  useEffect(() => {
+    if (page !== safePage) setPage(safePage);
+  }, [page, safePage]);
+
+  useEffect(() => {
+    document.querySelector('main')?.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [safePage, tab]);
 
   useEffect(() => {
     if (!visibleRows.length) return;
@@ -588,25 +672,6 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
       );
     }
   }, [visibleRows, documentWorkItems, followUpByDocId, isLedgerCompletedForItem, authorName, ledgerByPatientId]);
-
-  useEffect(() => {
-    const el = loadMoreSentinelRef.current;
-    if (!el || !hasMoreRows) return;
-
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (!entry?.isIntersecting) return;
-        setLoadingMore(true);
-        window.setTimeout(() => {
-          setVisibleCount((n) => n + ESTIMATE_PAGE_SIZE);
-          setLoadingMore(false);
-        }, 120);
-      },
-      { rootMargin: '240px' }
-    );
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [hasMoreRows, visibleCount, displayedTabRows.length]);
 
   const ledgerPatientIds = useMemo(
     () => [...new Set(visibleRows.map((r) => r.patientId))],
@@ -926,8 +991,10 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
         return ctx.preauthId ? `Linked via pre-auth #${ctx.preauthId} (ledger)` : 'Linked via ledger pre-auth';
       case 'ledger_claim':
         return ctx.claimId ? `Linked via claim #${ctx.claimId} (ledger)` : 'Linked via ledger claim';
+      case 'ledger_hint_code':
+        return 'Linked via ledger (document procedure codes)';
       case 'ledger_date':
-        return 'Linked via ledger (date / code match)';
+        return 'Linked via ledger (date proximity — weak match)';
       case 'ledger_treatment_planned':
         return 'Linked via treatment-planned procedures (ledger)';
       case 'document_text':
@@ -1012,7 +1079,7 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
         <td className="p-3 text-xs text-slate-600 tabular-nums whitespace-nowrap">
           {r.treatmentDateLabel ?? r.createdLabel ?? '—'}
           {r.treatmentDateSource === 'ledger' && (
-            <p className="text-[9px] text-teal-700 font-bold mt-0.5">From ledger</p>
+            <p className="text-[9px] text-teal-700 font-bold mt-0.5">{treatmentDateLedgerHint(r)}</p>
           )}
         </td>
         <td className="p-3 text-xs text-slate-600 tabular-nums whitespace-nowrap">
@@ -1157,25 +1224,11 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
 
   const renderTable = (
     rows: DocumentEstimateRow[],
-    totalCount: number,
     emptyLabel: string,
-    options: { showCovered?: boolean; hasMore?: boolean } = {}
+    options: { showCovered?: boolean } = {}
   ) => {
-    const { showCovered = false, hasMore = false } = options;
+    const { showCovered = false } = options;
     const colSpan = 9;
-    const loadMoreRow = hasMore ? (
-      <tr ref={loadMoreSentinelRef}>
-        <td colSpan={colSpan} className="p-4 text-center text-[10px] font-bold text-slate-400 uppercase tracking-wide">
-          {loadingMore ? 'Loading more…' : `Showing ${rows.length} of ${totalCount} — scroll for more`}
-        </td>
-      </tr>
-    ) : rows.length > 0 && totalCount > rows.length ? (
-      <tr>
-        <td colSpan={colSpan} className="p-3 text-center text-[10px] font-bold text-slate-400 uppercase">
-          Showing all {totalCount}
-        </td>
-      </tr>
-    ) : null;
     const tableHead = (
       <thead>
         <tr className="bg-slate-50 border-b border-slate-200 text-[10px] font-black uppercase text-slate-500">
@@ -1218,7 +1271,7 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
       const sections = groupRowsByCodeType(rows);
       return (
         <div className="space-y-6">
-          {sections.map((section, sectionIdx) => (
+          {sections.map((section) => (
             <div key={section.key} className="border border-slate-200 rounded-lg overflow-hidden overflow-x-auto">
               <div className="bg-slate-100 border-b border-slate-200 px-4 py-2 flex items-center justify-between">
                 <h3 className="text-[10px] font-black uppercase tracking-widest text-slate-700">{section.label}</h3>
@@ -1228,7 +1281,6 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
                 {tableHead}
                 <tbody className="divide-y divide-slate-100">
                   {section.rows.map((r) => renderDataRow(r, { showCovered }))}
-                  {sectionIdx === sections.length - 1 ? loadMoreRow : null}
                 </tbody>
               </table>
             </div>
@@ -1243,9 +1295,49 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
           {tableHead}
           <tbody className="divide-y divide-slate-100">
             {rows.map((r) => renderDataRow(r, { showCovered }))}
-            {loadMoreRow}
           </tbody>
         </table>
+      </div>
+    );
+  };
+
+  const renderPagination = (totalCount: number) => {
+    if (totalCount === 0) return null;
+    const pages = Math.max(1, Math.ceil(totalCount / ESTIMATE_PAGE_SIZE));
+    const currentPage = Math.min(page, pages);
+    const rangeStart = (currentPage - 1) * ESTIMATE_PAGE_SIZE + 1;
+    const rangeEnd = Math.min(currentPage * ESTIMATE_PAGE_SIZE, totalCount);
+
+    return (
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pt-4">
+        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">
+          Showing {rangeStart.toLocaleString()}–{rangeEnd.toLocaleString()} of {totalCount.toLocaleString()}
+        </p>
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-8 text-[10px] font-black uppercase"
+            disabled={currentPage <= 1}
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+          >
+            Previous
+          </Button>
+          <span className="text-[10px] font-bold text-slate-600 tabular-nums px-2">
+            Page {currentPage} of {pages}
+          </span>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-8 text-[10px] font-black uppercase"
+            disabled={currentPage >= pages}
+            onClick={() => setPage((p) => Math.min(pages, p + 1))}
+          >
+            Next
+          </Button>
+        </div>
       </div>
     );
   };
@@ -1279,26 +1371,28 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
             {TAB_LABELS[id]}
             <span
               className={`ml-1.5 inline-flex min-w-[1.25rem] justify-center rounded-full px-1.5 py-0.5 text-[9px] font-black ${
-                (id === 'pred_approved' ? filteredApproved.length : filteredFollowUp.length) > 0
-                  ? id === 'pred_approved'
-                    ? 'bg-teal-500 text-white'
-                    : 'bg-amber-500 text-white'
-                  : 'bg-slate-200 text-slate-500'
+                isPageLoading
+                  ? 'bg-slate-200 text-slate-500'
+                  : (id === 'pred_approved' ? filteredApproved.length : filteredFollowUp.length) > 0
+                    ? id === 'pred_approved'
+                      ? 'bg-teal-500 text-white'
+                      : 'bg-amber-500 text-white'
+                    : 'bg-slate-200 text-slate-500'
               }`}
             >
-              {id === 'pred_approved' ? filteredApproved.length : filteredFollowUp.length}
+              {isPageLoading ? (
+                <Loader2 className="h-3 w-3 animate-spin" aria-label="Loading" />
+              ) : id === 'pred_approved' ? (
+                filteredApproved.length
+              ) : (
+                filteredFollowUp.length
+              )}
             </span>
           </button>
         ))}
       </div>
 
-      <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
-        <Input
-          placeholder="Search patient, code type, procedure codes, document…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="max-w-md h-10 text-xs font-bold border-slate-200"
-        />
+      <div className="flex flex-col lg:flex-row lg:items-end lg:justify-end gap-4">
         <div className="flex flex-wrap items-center gap-3">
           <div className="space-y-1">
             <p className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Treatment age</p>
@@ -1350,7 +1444,16 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
         </span>
         {' · '}
         <span className="text-slate-400">
-          {predApprovedRows.length} open on pre-d approved tab · {predFollowUpRows.length} open on acknowledgment tab
+          {isPageLoading ? (
+            <span className="inline-flex items-center gap-1.5">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Loading open counts…
+            </span>
+          ) : (
+            <>
+              {predApprovedRows.length} open on pre-d approved tab · {predFollowUpRows.length} open on acknowledgment tab
+            </>
+          )}
         </span>
       </p>
 
@@ -1361,20 +1464,89 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
         </div>
       ) : null}
 
-      {loading ? (
+      {isPageLoading ? (
         <div className="p-24 flex flex-col items-center justify-center gap-3 text-[10px] font-black text-slate-400 uppercase tracking-widest">
           <Loader2 className="h-8 w-8 animate-spin text-teal-600" />
           Loading estimates…
         </div>
-      ) : tab === 'pred_approved' ? (
-        renderTable(visibleRows, filteredApproved.length, 'No pre-d approved or EOB documents', {
-          showCovered: true,
-          hasMore: hasMoreRows,
-        })
       ) : (
-        renderTable(visibleRows, filteredFollowUp.length, 'No pre-d acknowledgment documents to follow up', {
-          hasMore: hasMoreRows,
-        })
+        <>
+          {isRowsStale ? (
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide flex items-center gap-2 -mt-4 mb-2">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Updating list…
+            </p>
+          ) : null}
+          <div className="rounded-lg border border-slate-200 bg-white p-4 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+              <div className="relative flex-1 max-w-xl">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <Input
+                  placeholder={
+                    tab === 'pred_approved'
+                      ? 'Search this section: patient, code type, procedure, document, dates…'
+                      : 'Search this section: patient, code type, procedure, acknowledgment…'
+                  }
+                  value={activeTabSearch}
+                  onChange={(e) =>
+                    setSearchByTab((prev) => ({
+                      ...prev,
+                      [tab]: e.target.value,
+                    }))
+                  }
+                  className="h-10 pl-9 text-xs font-bold border-slate-200"
+                  aria-label={
+                    tab === 'pred_approved'
+                      ? 'Search pre-d approved and EOB documents'
+                      : 'Search predetermination acknowledgement documents'
+                  }
+                />
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                {activeTabSearchTrimmed ? (
+                  <>
+                    <span className="text-[10px] font-bold text-slate-500 tabular-nums">
+                      {totalDisplayedRows} of {activeTabRowsBeforeSearch.length} in this section
+                    </span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 text-[10px] font-black uppercase"
+                      onClick={() =>
+                        setSearchByTab((prev) => ({
+                          ...prev,
+                          [tab]: '',
+                        }))
+                      }
+                    >
+                      Clear
+                    </Button>
+                  </>
+                ) : (
+                  <span className="text-[10px] font-bold text-slate-400">
+                    {totalDisplayedRows} open in {TAB_LABELS[tab].toLowerCase()}
+                  </span>
+                )}
+              </div>
+            </div>
+            {tab === 'pred_approved'
+              ? renderTable(
+                  visibleRows,
+                  activeTabSearchTrimmed
+                    ? 'No pre-d approved or EOB rows match your search'
+                    : 'No pre-d approved or EOB documents',
+                  { showCovered: true }
+                )
+              : renderTable(
+                  visibleRows,
+                  activeTabSearchTrimmed
+                    ? 'No acknowledgment rows match your search'
+                    : 'No pre-d acknowledgment documents to follow up'
+                )}
+            {renderPagination(totalDisplayedRows)}
+          </div>
+        </>
       )}
 
       {undoClose ? (

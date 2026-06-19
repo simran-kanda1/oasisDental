@@ -6,6 +6,7 @@ export interface QueueRowTrackingDoc {
   patientId?: string;
   queueId?: string;
   notRebookedReason?: string;
+  notRebookedReasonAt?: string;
   notes?: string;
   updatedAt?: string;
   updatedBy?: string;

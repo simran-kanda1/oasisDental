@@ -125,6 +125,20 @@ export function formatReferrerDisplayName(ref: DentrixReferralDoc): string {
   return ref.non_person_flag ? 'Organization' : 'Referrer';
 }
 
+/** True when the referring source name looks like a doctor (e.g. "Dr Smith", "DR. Jones"). */
+export function isDoctorReferrerSource(sourceLabel: string): boolean {
+  const text = cleanDentrixText(sourceLabel).toLowerCase();
+  if (!text) return false;
+  return /\bdr\.?\b/.test(text);
+}
+
+function isDoctorReferralDoc(ref: DentrixReferralDoc): boolean {
+  return (
+    Number(ref.ref_type) === REFERRAL_TYPE_DOCTOR_OR_SOURCE &&
+    isDoctorReferrerSource(formatReferrerDisplayName(ref))
+  );
+}
+
 function formatReferrerFromLinkFallback(link: DentrixPatientReferralLinkDoc): string {
   const parts = [linkTitle(link), cleanDentrixText(refFirstFromLink(link)), cleanDentrixText(refLastFromLink(link))].filter(
     Boolean
@@ -153,12 +167,13 @@ export function buildReferralDoctorQueueRows(
 ): ReferralDoctorQueueRow[] {
   const doctorRefIds = new Set(
     doctorReferrals
-      .filter((r) => Number(r.ref_type) === REFERRAL_TYPE_DOCTOR_OR_SOURCE)
+      .filter(isDoctorReferralDoc)
       .map((r) => Number(r.ref_id))
       .filter((n) => Number.isFinite(n) && n > 0)
   );
   const refById = new Map<number, DentrixReferralDoc>();
   for (const r of doctorReferrals) {
+    if (!isDoctorReferralDoc(r)) continue;
     const id = Number(r.ref_id);
     if (Number.isFinite(id) && id > 0) refById.set(id, r);
   }
@@ -184,6 +199,7 @@ export function buildReferralDoctorQueueRows(
       `Patient #${pid}`;
 
     const referrerDisplay = ref ? formatReferrerDisplayName(ref) : formatReferrerFromLinkFallback(link);
+    if (!isDoctorReferrerSource(referrerDisplay)) continue;
     const referrerPhone = ref ? cleanDentrixText(ref.phone) : linkPhone(link);
     const referrerCity = ref ? cleanDentrixText(ref.city) : linkCity(link);
 
@@ -209,6 +225,8 @@ export function buildReferralDoctorQueueRows(
 
     const ref = refById.get(refId);
     if (!ref) continue;
+    const referrerDisplay = formatReferrerDisplayName(ref);
+    if (!isDoctorReferrerSource(referrerDisplay)) continue;
     const patientName =
       formatPatientFullName(p.first_name, p.last_name).trim() || `Patient #${pid}`;
     pushRow({
@@ -216,7 +234,7 @@ export function buildReferralDoctorQueueRows(
       patientId: pid,
       patientName,
       referralRefId: refId,
-      referrerDisplay: formatReferrerDisplayName(ref),
+      referrerDisplay,
       referrerPhone: cleanDentrixText(ref.phone),
       referrerCity: cleanDentrixText(ref.city),
     });

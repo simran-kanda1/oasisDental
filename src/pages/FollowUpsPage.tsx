@@ -36,6 +36,7 @@ interface FollowUpTrackingDoc {
     outcome?: string;
     notes?: string;
     notRebookedReason?: string;
+    notRebookedReasonAt?: string;
     lastChanged?: string;
     followUpDate?: string;
     lastNoteAt?: string;
@@ -442,11 +443,13 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
                                                 className="w-full max-w-[160px] h-9 rounded-xl border border-slate-100 text-[9px] font-black uppercase bg-white disabled:opacity-40"
                                                 disabled={!!updatingId || !!item.tracking?.nextAppointmentBooked}
                                                 value={item.tracking?.notRebookedReason ?? ''}
-                                                onChange={(e) =>
-                                                    upsertTracking(item, {
-                                                        notRebookedReason: e.target.value || undefined,
-                                                    })
-                                                }
+                                                onChange={(e) => {
+                                                    const value = e.target.value;
+                                                    void upsertTracking(item, {
+                                                        notRebookedReason: value || undefined,
+                                                        notRebookedReasonAt: value ? new Date().toISOString() : undefined,
+                                                    });
+                                                }}
                                             >
                                                 {NOT_REBOOKED_REASON_OPTIONS.map((o) => (
                                                     <option key={o.value || 'empty'} value={o.value}>
@@ -454,6 +457,19 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
                                                     </option>
                                                 ))}
                                             </select>
+                                            {item.tracking?.notRebookedReason &&
+                                            (item.tracking.notRebookedReasonAt || item.tracking.lastChanged) ? (
+                                                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-1.5 tabular-nums">
+                                                    Updated{' '}
+                                                    {format(
+                                                        new Date(
+                                                            item.tracking.notRebookedReasonAt ??
+                                                                item.tracking.lastChanged!
+                                                        ),
+                                                        'MMM d, h:mm a'
+                                                    )}
+                                                </p>
+                                            ) : null}
                                         </td>
                                         <td className="p-6">
                                             <div className="text-xs font-black text-rose-600">{item.missedAppointments}</div>

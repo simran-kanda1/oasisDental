@@ -2,6 +2,11 @@ import type { DentrixAppointmentDoc, DentrixPatientAppointmentInfoDoc } from './
 import { cleanDentrixText, formatDentrixDateKey, parseDentrixDate } from './dentrix';
 import { addMonths, isAfter, isBefore, isSameDay, startOfDay } from 'date-fns';
 
+/** Today or any later calendar day — used for “has a future appointment booked”. */
+export function isAppointmentOnOrAfterToday(apptDate: Date, today: Date): boolean {
+  return !isBefore(startOfDay(apptDate), startOfDay(today));
+}
+
 /**
  * Parse recall interval from appointment label.
  * 4M / 4m / 4 mo / 2 months → 4 or 2 (months until next visit is expected).
@@ -45,11 +50,23 @@ export function isRecallOverdue(appt: DentrixAppointmentDoc, now: Date): boolean
 }
 
 export function appointmentLabelText(a: DentrixAppointmentDoc): string {
+  const extra = a as DentrixAppointmentDoc & {
+    description?: string;
+    note?: string;
+    notes?: string;
+    production_type_desc?: string;
+    procedure_description?: string;
+  };
   const parts = [
     cleanDentrixText(a.reason),
     cleanDentrixText(a.appointment_type),
     cleanDentrixText(a.appt_type),
     cleanDentrixText(a.appointmentType),
+    cleanDentrixText(extra.description),
+    cleanDentrixText(extra.note),
+    cleanDentrixText(extra.notes),
+    cleanDentrixText(extra.production_type_desc),
+    cleanDentrixText(extra.procedure_description),
   ].filter(Boolean);
   return parts.join(' ').toLowerCase();
 }
@@ -61,6 +78,19 @@ export function isAppointmentNoShow(a: DentrixAppointmentDoc): boolean {
   const sid = Number(a.status_id ?? 0);
   if ([3, 5, 21, 22].includes(sid)) return true;
   return false;
+}
+
+/** Broken / cancelled — do not count as a booked future visit. */
+export function isAppointmentCancelledOrBroken(a: DentrixAppointmentDoc): boolean {
+  if (isAppointmentNoShow(a)) return true;
+  const s = appointmentLabelText(a);
+  return /\b(cancelled|canceled|broken appt|brk appt)\b/i.test(s);
+}
+
+export function isActiveScheduledAppointment(a: DentrixAppointmentDoc, today: Date): boolean {
+  const d = parseDentrixDate(a.appointment_date);
+  if (!d || !isAppointmentOnOrAfterToday(d, today)) return false;
+  return !isAppointmentCancelledOrBroken(a);
 }
 
 export function isEstimateAppointment(a: DentrixAppointmentDoc): boolean {

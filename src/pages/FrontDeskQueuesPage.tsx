@@ -15,11 +15,13 @@ import {
   FRONT_DESK_QUEUE_DEFS,
   NO_APPT_BOOKED_QUEUE_DEF,
   NO_APPT_BOOKED_QUEUE_ID,
+  buildQueueIndexes,
   buildQueueRows,
   getFrontDeskQueueDef,
   isStandaloneFrontDeskQueue,
   type AgeBucketFilter,
   type QueueBuildContext,
+  type QueueRow,
   type VisitWeekBucketFilter,
 } from '../data/queueRules';
 import type { DentrixProcedureCodeDoc } from '../lib/procedureCodeTypes';
@@ -27,14 +29,17 @@ import { getQueueCodeRulesLabel } from '../lib/queueProcedureCodes';
 import { fetchLedgerForPatients } from '../lib/ledgerTransactions';
 import type { DentrixLedgerTransactionDoc } from '../lib/ledgerTransactions';
 import FollowUpsPage from './FollowUpsPage';
-import type { DentrixAppointmentDoc, DentrixPatientDoc } from '../lib/dentrix';
+import type { DentrixAppointmentDoc, DentrixPatientDoc, DentrixPatientAppointmentInfoDoc } from '../lib/dentrix';
 import { PatientProfileTrigger } from '../components/PatientProfileTrigger';
 import { QUEUE_ROW_TRACKING_COLLECTION, queueTrackingDocId } from '../lib/queueRowTracking';
 import type { QueueRowTrackingDoc } from '../lib/queueRowTracking';
 import { getNotRebookedReasonOptionsForQueue } from '../lib/notRebookedReasons';
-import { APPOINTMENTS_QUERY_LIMIT } from '../lib/appointmentsQuery';
-import { format } from 'date-fns';
+import { APPOINTMENTS_QUERY_LIMIT, FUTURE_APPOINTMENTS_QUERY_LIMIT, mergeAppointmentsById } from '../lib/appointmentsQuery';
+import { format, startOfDay } from 'date-fns';
+import { Search } from 'lucide-react';
 import { Textarea } from '../components/ui/textarea';
+import { Input } from '../components/ui/input';
+import { Button } from '../components/ui/button';
 import {
   PATIENT_REFERRAL_LINK_COLLECTIONS,
   REFERRAL_PROGRESS_TRACKING_COLLECTION,
@@ -58,7 +63,7 @@ const AGE_OPTIONS: { id: AgeBucketFilter; label: string }[] = [
   { id: '12+', label: '1+ yr' },
 ];
 
-const LEDGER_PATIENT_CAP = 400;
+const LEDGER_PATIENT_CAP = 2500;
 
 const WEEK_OPTIONS: { id: VisitWeekBucketFilter; label: string }[] = [
   { id: 'all', label: 'All' },
@@ -71,6 +76,33 @@ const WEEK_OPTIONS: { id: VisitWeekBucketFilter; label: string }[] = [
 const USE_WEEK_FILTER = new Set(['emerg_follow_up', 'new_patient_follow_up']);
 
 type ReferralProgressFilter = 'all' | 'needs_update';
+
+function queueRowMatchesSearch(row: QueueRow, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  const haystack = [
+    row.patientName,
+    row.detail,
+    row.dateLabel ?? '',
+    row.provider ?? '',
+    row.patientId,
+  ]
+    .join(' ')
+    .toLowerCase();
+  return haystack.includes(q);
+}
+
+function referralRowMatchesSearch(
+  row: { patientName: string; patientId: string; referrerDisplay: string; referrerPhone: string; referrerCity: string },
+  query: string
+): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  const haystack = [row.patientName, row.patientId, row.referrerDisplay, row.referrerPhone, row.referrerCity]
+    .join(' ')
+    .toLowerCase();
+  return haystack.includes(q);
+}
 
 export interface FrontDeskQueuesPageProps {
   /** Opens a specific queue (e.g. no appt booked when arriving from legacy nav). */
@@ -97,7 +129,9 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
   const [visitWeekBucket, setVisitWeekBucket] = useState<VisitWeekBucketFilter>('all');
   const [referralProgressFilter, setReferralProgressFilter] = useState<ReferralProgressFilter>('needs_update');
   const [appointments, setAppointments] = useState<DentrixAppointmentDoc[]>([]);
+  const [futureAppointments, setFutureAppointments] = useState<DentrixAppointmentDoc[]>([]);
   const [patientsById, setPatientsById] = useState<Record<string, DentrixPatientDoc>>({});
+  const [patientInfoById, setPatientInfoById] = useState<Record<string, DentrixPatientAppointmentInfoDoc>>({});
   const [doctorReferrals, setDoctorReferrals] = useState<DentrixReferralDoc[]>([]);
   const [patientReferralLinksByCol, setPatientReferralLinksByCol] = useState<
     Record<string, DentrixPatientReferralLinkDoc[]>
@@ -114,6 +148,7 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
   const [ledgerByPatientId, setLedgerByPatientId] = useState<Map<number, DentrixLedgerTransactionDoc[]>>(new Map());
   const [ledgerLoading, setLedgerLoading] = useState(false);
   const [saveNoticeApptId, setSaveNoticeApptId] = useState<string | null>(null);
+  const [sectionSearch, setSectionSearch] = useState('');
 
   useEffect(() => {
     const unsubProc = onSnapshot(collection(db, 'procedure_codes'), (snap) => {
@@ -122,10 +157,15 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
     return unsubProc;
   }, []);
 
+  const allAppointments = useMemo(
+    () => mergeAppointmentsById(appointments, futureAppointments),
+    [appointments, futureAppointments]
+  );
+
   useEffect(() => {
-    const ids: string[] = [];
     const seen = new Set<string>();
-    for (const a of appointments) {
+    const ids: string[] = [];
+    for (const a of allAppointments) {
       const pid = String(a.patient_id ?? '');
       if (!pid || seen.has(pid)) continue;
       seen.add(pid);
@@ -150,19 +190,31 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
     return () => {
       cancelled = true;
     };
-  }, [appointments]);
+  }, [allAppointments]);
 
   const queueBuildCtx = useMemo<QueueBuildContext>(
-    () => ({ procedureCodes, ledgerByPatientId, trackingByApptId }),
-    [procedureCodes, ledgerByPatientId, trackingByApptId]
+    () => ({ procedureCodes, ledgerByPatientId, trackingByApptId, patientInfoById }),
+    [procedureCodes, ledgerByPatientId, trackingByApptId, patientInfoById]
   );
 
   useEffect(() => {
+    const todayStart = format(startOfDay(new Date()), "yyyy-MM-dd'T'00:00:00'Z'");
     const unsubA = onSnapshot(
       query(collection(db, 'appointments'), orderBy('appointment_date', 'desc'), limit(APPOINTMENTS_QUERY_LIMIT)),
       (snap) => {
         setAppointments(snap.docs.map((d) => ({ id: d.id, ...d.data() } as DentrixAppointmentDoc)));
         setLoading(false);
+      }
+    );
+    const unsubFuture = onSnapshot(
+      query(
+        collection(db, 'appointments'),
+        where('appointment_date', '>=', todayStart),
+        orderBy('appointment_date', 'asc'),
+        limit(FUTURE_APPOINTMENTS_QUERY_LIMIT)
+      ),
+      (snap) => {
+        setFutureAppointments(snap.docs.map((d) => ({ id: d.id, ...d.data() } as DentrixAppointmentDoc)));
       }
     );
     const unsubP = onSnapshot(collection(db, 'patients'), (snap) => {
@@ -173,6 +225,14 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
       });
       setPatientsById(map);
     });
+    const unsubInfo = onSnapshot(collection(db, 'patient_appointment_info'), (snap) => {
+      const map: Record<string, DentrixPatientAppointmentInfoDoc> = {};
+      snap.docs.forEach((d) => {
+        const row = { id: d.id, ...d.data() } as DentrixPatientAppointmentInfoDoc;
+        map[String(row.patient_id ?? row.id)] = row;
+      });
+      setPatientInfoById(map);
+    });
     const unsubT = onSnapshot(collection(db, QUEUE_ROW_TRACKING_COLLECTION), (snap) => {
       const map: Record<string, QueueRowTrackingDoc> = {};
       snap.docs.forEach((d) => {
@@ -182,7 +242,9 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
     });
     return () => {
       unsubA();
+      unsubFuture();
       unsubP();
+      unsubInfo();
       unsubT();
     };
   }, []);
@@ -235,7 +297,7 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
     if (activeId === REFERRAL_DOCTOR_QUEUE_ID || activeId === NO_APPT_BOOKED_QUEUE_ID) return [];
     return buildQueueRows(
       activeId,
-      appointments,
+      allAppointments,
       patientsById,
       0,
       new Date(),
@@ -243,7 +305,13 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
       USE_WEEK_FILTER.has(activeId) ? visitWeekBucket : 'all',
       queueBuildCtx
     );
-  }, [activeId, appointments, patientsById, ageBucket, visitWeekBucket, queueBuildCtx]);
+  }, [activeId, allAppointments, patientsById, ageBucket, visitWeekBucket, queueBuildCtx]);
+
+  const sectionSearchTrimmed = sectionSearch.trim();
+  const displayedQueueRows = useMemo(
+    () => queueRows.filter((row) => queueRowMatchesSearch(row, sectionSearch)),
+    [queueRows, sectionSearch]
+  );
 
   const patientReferralLinks = useMemo(
     () => PATIENT_REFERRAL_LINK_COLLECTIONS.flatMap((c) => patientReferralLinksByCol[c] ?? []),
@@ -255,7 +323,7 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
     [patientsById, doctorReferrals, patientReferralLinks]
   );
 
-  const filteredReferralRows = useMemo(() => {
+  const referralRowsForFilter = useMemo(() => {
     if (referralProgressFilter === 'all') return referralRows;
     return referralRows.filter((row) => {
       const tr = referralProgressByDocId[row.progressDocId];
@@ -263,12 +331,50 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
     });
   }, [referralRows, referralProgressByDocId, referralProgressFilter]);
 
+  const filteredReferralRows = useMemo(
+    () => referralRowsForFilter.filter((row) => referralRowMatchesSearch(row, sectionSearch)),
+    [referralRowsForFilter, sectionSearch]
+  );
+
+  useEffect(() => {
+    setSectionSearch('');
+  }, [activeId]);
+
+  const localQueueCounts = useMemo(() => {
+    const counts: Record<string, number> = {
+      [NO_APPT_BOOKED_QUEUE_ID]: frontDeskByQueue[NO_APPT_BOOKED_QUEUE_ID] ?? 0,
+    };
+    if (loading || ledgerLoading) {
+      for (const q of FRONT_DESK_QUEUE_DEFS) {
+        counts[q.id] = frontDeskByQueue[q.id] ?? 0;
+      }
+      return counts;
+    }
+
+    const now = new Date();
+    const sharedIndexes = buildQueueIndexes(allAppointments, queueBuildCtx, patientsById);
+    for (const q of FRONT_DESK_QUEUE_DEFS) {
+      counts[q.id] = buildQueueRows(
+        q.id,
+        allAppointments,
+        patientsById,
+        0,
+        now,
+        'all',
+        'all',
+        queueBuildCtx,
+        sharedIndexes
+      ).length;
+    }
+    return counts;
+  }, [allAppointments, patientsById, queueBuildCtx, loading, ledgerLoading, frontDeskByQueue]);
+
   const queueNavCount = (queueId: string) => {
     if (queueId === REFERRAL_DOCTOR_QUEUE_ID) {
-      return referralRows.filter((row) => {
-        const tr = referralProgressByDocId[row.progressDocId];
-        return tr?.referrerUpdatedOnProgress !== true;
-      }).length;
+      return referralRows.length;
+    }
+    if (queueId === NO_APPT_BOOKED_QUEUE_ID || FRONT_DESK_QUEUE_DEFS.some((q) => q.id === queueId)) {
+      return localQueueCounts[queueId] ?? 0;
     }
     return frontDeskByQueue[queueId] ?? 0;
   };
@@ -337,8 +443,6 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
   );
 
   const reasonOptions = getNotRebookedReasonOptionsForQueue(activeId);
-  const showEmergRemove = activeId === 'emerg_follow_up';
-  const showExtractionComplete = activeId === 'extraction';
   const reasonDisabled = (rebooked: boolean | undefined) => activeId === 'no_shows_past_week' && rebooked === true;
 
   const showMainLoader = isNoApptBookedQueue ? false : isReferralQueue ? !referralsReady : loading || ledgerLoading;
@@ -470,7 +574,51 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
         {showMainLoader ? (
           <div className="p-24 text-center text-[10px] font-black text-slate-300 uppercase tracking-widest">Loading…</div>
         ) : isReferralQueue ? (
-          <div className="bg-white border border-slate-200 rounded-lg overflow-hidden shadow-sm overflow-x-auto">
+          <div className="rounded-lg border border-slate-200 bg-white p-4 space-y-4 shadow-sm">
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+              <div className="relative flex-1 max-w-xl">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <Input
+                  placeholder="Search this section: patient, referrer, phone, city…"
+                  value={sectionSearch}
+                  onChange={(e) => setSectionSearch(e.target.value)}
+                  className="h-10 pl-9 text-xs font-bold border-slate-200"
+                  aria-label="Search referrals"
+                />
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                {sectionSearchTrimmed ? (
+                  <>
+                    <span className="text-[10px] font-bold text-slate-500 tabular-nums">
+                      {filteredReferralRows.length} of {referralRowsForFilter.length} in this section
+                    </span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 text-[10px] font-black uppercase"
+                      onClick={() => setSectionSearch('')}
+                    >
+                      Clear
+                    </Button>
+                  </>
+                ) : (
+                  <span className="text-[10px] font-bold text-slate-400">
+                    {referralRowsForFilter.length} referral{referralRowsForFilter.length === 1 ? '' : 's'}
+                  </span>
+                )}
+              </div>
+            </div>
+            {filteredReferralRows.length === 0 ? (
+              <div className="p-12 text-center border border-dashed border-slate-200 rounded-md text-xs text-slate-400 font-bold uppercase tracking-widest">
+                {referralRowsForFilter.length === 0
+                  ? 'No rows: sync patient↔referrer links (e.g. sp_getpatientreferrals) into Firestore as patient_referrals with patient_id + referral_id, and/or set referred_by_ref_id on patients. Doctor sources must have ref_type = 1 in referrals.'
+                  : sectionSearchTrimmed
+                    ? 'No referrals match your search'
+                    : 'No rows for this filter'}
+              </div>
+            ) : (
+          <div className="border border-slate-200 rounded-lg overflow-hidden overflow-x-auto">
             <table className="w-full text-left text-sm min-w-[960px]">
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-200 text-[10px] font-black uppercase tracking-widest text-slate-500">
@@ -487,16 +635,7 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {filteredReferralRows.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} className="p-12 text-center text-xs text-slate-400 font-bold uppercase tracking-widest">
-                      {referralRows.length === 0
-                        ? 'No rows: sync patient↔referrer links (e.g. sp_getpatientreferrals) into Firestore as patient_referrals with patient_id + referral_id, and/or set referred_by_ref_id on patients. Doctor sources must have ref_type = 1 in referrals.'
-                        : 'No rows for this filter'}
-                    </td>
-                  </tr>
-                ) : (
-                  filteredReferralRows.map((row) => {
+                  {filteredReferralRows.map((row) => {
                     const tr = referralProgressByDocId[row.progressDocId];
                     const draftKey = row.progressDocId;
                     const noteVal =
@@ -563,13 +702,57 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
                         </td>
                       </tr>
                     );
-                  })
-                )}
+                  })}
               </tbody>
             </table>
           </div>
+            )}
+          </div>
         ) : (
-          <div className="bg-white border border-slate-200 rounded-lg overflow-hidden shadow-sm overflow-x-auto max-h-[calc(100vh-14rem)] overflow-y-auto">
+          <div className="rounded-lg border border-slate-200 bg-white p-4 space-y-4 shadow-sm">
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+              <div className="relative flex-1 max-w-xl">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <Input
+                  placeholder="Search this section: patient, detail, provider, date…"
+                  value={sectionSearch}
+                  onChange={(e) => setSectionSearch(e.target.value)}
+                  className="h-10 pl-9 text-xs font-bold border-slate-200"
+                  aria-label="Search queue"
+                />
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                {sectionSearchTrimmed ? (
+                  <>
+                    <span className="text-[10px] font-bold text-slate-500 tabular-nums">
+                      {displayedQueueRows.length} of {queueRows.length} in this section
+                    </span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 text-[10px] font-black uppercase"
+                      onClick={() => setSectionSearch('')}
+                    >
+                      Clear
+                    </Button>
+                  </>
+                ) : (
+                  <span className="text-[10px] font-bold text-slate-400">
+                    {queueRows.length} row{queueRows.length === 1 ? '' : 's'}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {displayedQueueRows.length === 0 ? (
+              <div className="p-12 text-center border border-dashed border-slate-200 rounded-md text-xs text-slate-400 font-bold uppercase tracking-widest">
+                {queueRows.length === 0
+                  ? 'No rows for this queue / filter'
+                  : 'No rows match your search'}
+              </div>
+            ) : (
+          <div className="border border-slate-200 rounded-lg overflow-hidden overflow-x-auto max-h-[calc(100vh-16rem)] overflow-y-auto bg-white">
             <table className="w-full text-left text-sm min-w-[1100px]">
               <thead className="sticky top-0 z-10 bg-slate-50">
                 <tr className="bg-slate-50 border-b border-slate-200 text-[10px] font-black uppercase tracking-widest text-slate-500">
@@ -591,27 +774,11 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
                   )}
                   <th className="p-3 min-w-[140px]">Why not rebooked</th>
                   <th className="p-3 pr-4 min-w-[200px]">Notes</th>
-                  {(showEmergRemove || showExtractionComplete) && (
-                    <th className="p-3 pr-4 min-w-[100px]">Actions</th>
-                  )}
+                  <th className="p-3 pr-4 min-w-[148px]">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {queueRows.length === 0 ? (
-                  <tr>
-                    <td
-                      colSpan={
-                        activeId === 'no_shows_past_week'
-                          ? 6
-                          : 7 + (showEmergRemove || showExtractionComplete ? 1 : 0)
-                      }
-                      className="p-12 text-center text-xs text-slate-400 font-bold uppercase tracking-widest"
-                    >
-                      No rows for this queue / filter
-                    </td>
-                  </tr>
-                ) : (
-                  queueRows.map((row) => {
+                  {displayedQueueRows.map((row) => {
                     const tr = trackingByApptId[row.appointmentFirestoreId];
                     const draftKey = row.appointmentFirestoreId;
                     const noteVal =
@@ -655,11 +822,13 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
                             className="w-full max-w-[160px] h-9 rounded-md border border-slate-200 text-[10px] font-bold uppercase bg-white disabled:opacity-40"
                             disabled={reasonDisabled(row.rebooked) || savingApptId === row.appointmentFirestoreId}
                             value={tr?.notRebookedReason ?? ''}
-                            onChange={(e) =>
+                            onChange={(e) => {
+                              const value = e.target.value;
                               persistTracking(row.appointmentFirestoreId, row.patientId, {
-                                notRebookedReason: e.target.value || undefined,
-                              })
-                            }
+                                notRebookedReason: value || undefined,
+                                notRebookedReasonAt: value ? new Date().toISOString() : undefined,
+                              });
+                            }}
                           >
                             {reasonOptions.map((o) => (
                               <option key={o.value || 'empty'} value={o.value}>
@@ -667,6 +836,15 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
                               </option>
                             ))}
                           </select>
+                          {tr?.notRebookedReason && (tr.notRebookedReasonAt || tr.updatedAt) ? (
+                            <p className="text-[9px] text-slate-400 font-bold mt-1 tabular-nums">
+                              Updated{' '}
+                              {format(
+                                new Date(tr.notRebookedReasonAt ?? tr.updatedAt!),
+                                'MMM d, yyyy h:mm a'
+                              )}
+                            </p>
+                          ) : null}
                         </td>
                         <td className="p-3 pr-4">
                           <Textarea
@@ -708,27 +886,13 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
                             </p>
                           )}
                         </td>
-                        {(showEmergRemove || showExtractionComplete) && (
-                          <td className="p-3 pr-4 align-top">
-                            {showEmergRemove && (
-                              <button
+                        <td className="p-3 pr-4 align-top">
+                            <div className="flex flex-col gap-2 min-w-[132px]">
+                              <Button
                                 type="button"
-                                className="text-[9px] font-black uppercase text-rose-700 hover:underline disabled:opacity-40"
-                                disabled={savingApptId === row.appointmentFirestoreId}
-                                onClick={() =>
-                                  persistTracking(row.appointmentFirestoreId, row.patientId, {
-                                    removedFromList: true,
-                                    removedAt: new Date().toISOString(),
-                                  })
-                                }
-                              >
-                                Remove
-                              </button>
-                            )}
-                            {showExtractionComplete && (
-                              <button
-                                type="button"
-                                className="text-[9px] font-black uppercase text-teal-700 hover:underline disabled:opacity-40"
+                                size="sm"
+                                variant="outline"
+                                className="h-8 w-full text-[9px] font-black uppercase border-teal-300 text-teal-800 hover:bg-teal-50 whitespace-nowrap"
                                 disabled={savingApptId === row.appointmentFirestoreId}
                                 onClick={() =>
                                   persistTracking(row.appointmentFirestoreId, row.patientId, {
@@ -738,16 +902,31 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
                                 }
                               >
                                 Treatment complete
-                              </button>
-                            )}
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                className="h-8 w-full text-[9px] font-black uppercase border-rose-200 text-rose-700 hover:bg-rose-50 whitespace-nowrap"
+                                disabled={savingApptId === row.appointmentFirestoreId}
+                                onClick={() =>
+                                  persistTracking(row.appointmentFirestoreId, row.patientId, {
+                                    removedFromList: true,
+                                    removedAt: new Date().toISOString(),
+                                  })
+                                }
+                              >
+                                Remove
+                              </Button>
+                            </div>
                           </td>
-                        )}
                       </tr>
                     );
-                  })
-                )}
+                  })}
               </tbody>
             </table>
+          </div>
+            )}
           </div>
         )}
         </>

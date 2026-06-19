@@ -105,10 +105,24 @@ function claimAdaCodes(claim: DentrixInsuranceClaimDoc): Set<string> {
   return codes;
 }
 
-function scoreClaimByHintCodes(claim: DentrixInsuranceClaimDoc, hintCodes: string[]): number {
+export function scoreClaimByHintCodes(claim: DentrixInsuranceClaimDoc, hintCodes: string[]): number {
   if (!hintCodes.length) return 0;
   const claimCodes = claimAdaCodes(claim);
   return hintCodes.filter((c) => claimCodes.has(normalizeProcedureCode(c))).length;
+}
+
+/** Claim link requires explicit id in document text or overlapping procedure codes. */
+export function claimMatchIsAuthoritative(
+  claim: DentrixInsuranceClaimDoc,
+  idCandidates: number[],
+  hintCodes: string[]
+): boolean {
+  for (const id of idCandidates) {
+    if (claimNumericId(claim) === id || Number(claim.preauthid ?? claim.preauth_id) === id) {
+      return true;
+    }
+  }
+  return hintCodes.length > 0 && scoreClaimByHintCodes(claim, hintCodes) > 0;
 }
 
 export function findClaimForDocument(options: {
@@ -122,8 +136,10 @@ export function findClaimForDocument(options: {
   if (!claimsForPatient.length) return null;
 
   for (const id of idCandidates) {
-    const hit = claimsForPatient.find((c) => claimNumericId(c) === id || Number(c.preauthid ?? c.preauth_id) === id);
-    if (hit) return hit;
+    const hit = claimsForPatient.find(
+      (c) => claimNumericId(c) === id || Number(c.preauthid ?? c.preauth_id) === id
+    );
+    if (hit && claimMatchIsAuthoritative(hit, idCandidates, hintCodes)) return hit;
   }
 
   if (hintCodes.length) {

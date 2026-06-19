@@ -125,6 +125,14 @@ export function primaryCodeTypeForFilter(ctx: DocumentProcedureContext, filterGr
   return ctx.codeTypes.find((t) => t.groupId === filterGroupId) ?? ctx.primaryCodeType;
 }
 
+const STRONG_LEDGER_LINK_SOURCES = new Set<DocumentProcedureContext['linkSource']>([
+  'ledger_preauth',
+  'ledger_claim',
+  'ledger_hint_code',
+  'insurance_claim',
+  'ledger_treatment_planned',
+]);
+
 export function resolveTreatmentDate(
   ctx: DocumentProcedureContext,
   documentDate: unknown,
@@ -132,19 +140,29 @@ export function resolveTreatmentDate(
   ledgerRows: DentrixLedgerTransactionDoc[],
   adaByProccodeId: Map<number, string>
 ): { date: Date | null; label: string | null; source: 'ledger' | 'document' } {
+  const docDate = parseDentrixDate(documentDate);
+  const docLabel = formatDentrixDateKey(documentDate);
+
+  if (!STRONG_LEDGER_LINK_SOURCES.has(ctx.linkSource)) {
+    return { date: docDate, label: docLabel, source: 'document' };
+  }
+
   const relevantCodes = new Set(codesForGroup(ctx, groupId).map((c) => c.code));
   if (!relevantCodes.size) {
     relevantCodes.clear();
     ctx.procedureCodes.forEach((c) => relevantCodes.add(c.code));
   }
 
-  const docDate = parseDentrixDate(documentDate);
   const docFloor = docDate ? startOfDay(docDate) : null;
-
   const linkedCodes = new Set(ctx.procedureCodes.map((c) => c.code));
+  const preauthId = Number(ctx.preauthId) || 0;
+  const claimId = Number(ctx.claimId) || 0;
   let earliest: Date | null = null;
 
   for (const row of ledgerRows) {
+    if (preauthId && Number(row.preauthid) !== preauthId) continue;
+    if (claimId && Number(row.claimid) !== claimId) continue;
+
     const ada = adaByProccodeId.get(Number(row.proccodeid));
     if (!ada) continue;
     const matchesGroup = relevantCodes.has(ada);
@@ -163,11 +181,56 @@ export function resolveTreatmentDate(
     return { date: earliest, label: formatDentrixDateKey(earliest.toISOString()), source: 'ledger' };
   }
 
-  return {
-    date: docDate,
-    label: formatDentrixDateKey(documentDate),
-    source: 'document',
-  };
+  return { date: docDate, label: docLabel, source: 'document' };
+}
+
+/**
+ * Preauth code types with a ledger-sourced treatment date mean insurance responded
+ * and the amount was posted — no further estimate follow-up needed.
+ */
+export function isPreauthInsurancePostedOnLedger(
+  ctx: DocumentProcedureContext,
+  treatmentDateSource: 'ledger' | 'document'
+): boolean {
+  if (treatmentDateSource !== 'ledger') return false;
+  if (ctx.primaryCodeType?.requiresPreauth) return true;
+  return ctx.codeTypes.some((t) => t.requiresPreauth);
+}
+
+/**
+ * Hide / auto-close when ledger shows treatment complete or preauth insurance posted.
+ */
+export function shouldHideEstimateOnLedgerComplete(
+  ctx: DocumentProcedureContext,
+  treatmentDateSource: 'ledger' | 'document',
+  options?: { documentStatus?: 'book_right_away' | 'covered_eob' | 'needs_follow_up' | 'unclassified' }
+): boolean {
+  if (isPreauthInsurancePostedOnLedger(ctx, treatmentDateSource)) return true;
+  if (ctx.linkSource === 'ledger_preauth') return false;
+  if (options?.documentStatus === 'needs_follow_up') return false;
+  if (ctx.linkSource === 'insurance_claim') return false;
+  if (treatmentDateSource === 'ledger') return true;
+  return true;
+}
+
+/** Whether an estimate row should be removed / auto-closed based on ledger state. */
+export function isEstimateCompleteOnLedger(
+  ctx: DocumentProcedureContext,
+  groupId: string,
+  ledgerRows: DentrixLedgerTransactionDoc[],
+  adaByProccodeId: Map<number, string>,
+  documentDate: Date | null,
+  treatmentDateSource: 'ledger' | 'document',
+  options?: { documentStatus?: 'book_right_away' | 'covered_eob' | 'needs_follow_up' | 'unclassified' }
+): boolean {
+  const procedureContext = filterProcedureContextByGroup(ctx, groupId);
+  if (isPreauthInsurancePostedOnLedger(procedureContext, treatmentDateSource)) return true;
+  if (
+    !isTrackedTreatmentCompleted(procedureContext, groupId, ledgerRows, adaByProccodeId, documentDate)
+  ) {
+    return false;
+  }
+  return shouldHideEstimateOnLedgerComplete(ctx, treatmentDateSource, options);
 }
 
 /** True when tracked codes are completed in the ledger on or after the document date. */

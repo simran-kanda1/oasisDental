@@ -46,8 +46,12 @@ export interface WixInquiry {
     message: string;
     service: string;
     submittedAt: string;
-    status: 'new' | 'in_progress' | 'responded' | 'converted';
+    status: 'new' | 'in_progress' | 'responded' | 'converted' | 'closed';
     assignedTo?: string;
+    /** Why the inquiry was closed without booking an appointment. */
+    notBookedReason?: string;
+    closedAt?: string;
+    closedBy?: string;
     /** True when phone matches a Dentrix patient — hidden from inbox and open counts */
     phoneMatchExcluded?: boolean;
     wixContactId?: string;

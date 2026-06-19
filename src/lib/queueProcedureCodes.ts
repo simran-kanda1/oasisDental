@@ -11,6 +11,8 @@ import type { DentrixLedgerTransactionDoc } from './ledgerTransactions';
 import { appointmentLabelText } from './appointmentHeuristics';
 import { isSameDay, startOfDay, subDays, addDays } from 'date-fns';
 
+const CHART_COMPLETED = 102;
+
 /** A single inclusive code range or explicit code list entry. */
 export type QueueCodeRule =
   | { type: 'range'; begin: string; end: string }
@@ -22,6 +24,8 @@ export interface QueueProcedureConfig {
 }
 
 export const QUEUE_PROCEDURE_CONFIGS: QueueProcedureConfig[] = [
+  { queueId: 'hygiene_cc', codeRules: [{ type: 'range', begin: '11101', end: '13599' }] },
+  { queueId: 'ortho_follow_ups', codeRules: [{ type: 'range', begin: '80000', end: '89999' }] },
   { queueId: 'cbct', codeRules: [{ type: 'range', begin: '07000', end: '07043' }] },
   { queueId: 'fillings', codeRules: [{ type: 'range', begin: '23111', end: '23515' }] },
   { queueId: 'root_canal', codeRules: [{ type: 'range', begin: '30000', end: '39999' }] },
@@ -57,7 +61,6 @@ export const QUEUE_PROCEDURE_CONFIGS: QueueProcedureConfig[] = [
       { type: 'codes', codes: ['42811', '42819'] },
     ],
   },
-  { queueId: 'oral_sedation', codeRules: [{ type: 'range', begin: '92421', end: '92429' }] },
   {
     queueId: 'tmj_mri',
     codeRules: [
@@ -154,6 +157,35 @@ export function getAppointmentProcedureCodes(
   }
 
   return [...new Set([...fromText, ...fromLedger])].sort();
+}
+
+/** Completed (posted) ledger ADA codes on the appointment date (±1 day). */
+export function getCompletedLedgerCodesOnAppointment(
+  appt: DentrixAppointmentDoc,
+  ledgerRows: DentrixLedgerTransactionDoc[],
+  adaByProccodeId: Map<number, string>
+): string[] {
+  const apptDate = parseDentrixDate(appt.appointment_date);
+  const patid = Number(appt.patient_id);
+  if (!apptDate || !Number.isFinite(patid)) return [];
+
+  const dayStart = startOfDay(apptDate);
+  const windowStart = subDays(dayStart, 1);
+  const windowEnd = addDays(dayStart, 1);
+  const codes: string[] = [];
+
+  for (const row of ledgerRows) {
+    if (Number(row.patid) !== patid) continue;
+    if (Number(row.chartstatus) !== CHART_COMPLETED) continue;
+    const procDate = parseDentrixDate(row.procdate ?? row.entrydate);
+    if (!procDate) continue;
+    const pd = startOfDay(procDate);
+    if (pd < windowStart || pd > windowEnd) continue;
+    const ada = adaByProccodeId.get(Number(row.proccodeid));
+    if (ada) codes.push(ada);
+  }
+
+  return [...new Set(codes)].sort();
 }
 
 export function ledgerCodesOnAppointmentDate(

@@ -665,7 +665,7 @@ const StaffTasksPage: React.FC = () => {
                 </div>
                 <div className="bg-white border border-orange-200 rounded-lg p-4">
                     <p className="text-[9px] font-black text-orange-700 uppercase">Estimate follow-up</p>
-                    {badges.badgesReady ? (
+                    {badges.estimatesReady ? (
                         <p className="text-2xl font-black text-orange-900 mt-1">{estimateFollowUpCount}</p>
                     ) : (
                         <div className="h-8 w-16 mt-1 rounded bg-orange-100 animate-pulse" />
