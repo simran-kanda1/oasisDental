@@ -13,7 +13,9 @@ import {
 import { FOLLOW_UP_QUEUE_RECALL, isRecallFollowUpDoc } from '../lib/followUpQueues';
 import { LogOutreachModal, type OutreachLogPayload } from '../components/LogOutreachModal';
 import { PatientProfileTrigger } from '../components/PatientProfileTrigger';
-import { NOT_REBOOKED_REASON_OPTIONS } from '../lib/notRebookedReasons';
+import { getNotRebookedReasonOptionsForQueue, queueReasonRemovalPatch, queueReasonRemovesFromList } from '../lib/notRebookedReasons';
+import { NO_APPT_BOOKED_QUEUE_ID } from '../data/queueRules';
+import { UserX } from 'lucide-react';
 import { APPOINTMENTS_QUERY_LIMIT } from '../lib/appointmentsQuery';
 import { appendTimestampedFollowUpNote, latestNotePreview } from '../lib/followUpNotes';
 import {
@@ -23,6 +25,7 @@ import {
     formatPatientFullName,
     getPatientBestPhone,
     isActiveDentrixPatient,
+    parseDentrixDate,
     type DentrixAppointmentDoc,
     type DentrixFollowUpWorkItem,
     type DentrixPatientAppointmentInfoDoc,
@@ -47,6 +50,8 @@ interface FollowUpTrackingDoc {
     queue?: string;
     outreachHistory?: Array<Record<string, unknown>>;
     lastOutreach?: Record<string, unknown>;
+    removedFromList?: boolean;
+    removedAt?: string;
 }
 
 type BookingDraft = { date: string; type: string };
@@ -144,6 +149,10 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
 
             const latestAppt = latestAppointmentByPatientId[patientKey];
             const tracking = trackingByPatientId[patientKey];
+            if (tracking?.removedFromList) return;
+            if (tracking?.notRebookedReason && queueReasonRemovesFromList(NO_APPT_BOOKED_QUEUE_ID, tracking.notRebookedReason)) {
+                return;
+            }
 
             const patientName =
                 formatPatientFullName(patient?.first_name ?? info.first_name, patient?.last_name ?? info.last_name) ||
@@ -169,7 +178,14 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
             });
         });
 
-        rows.sort((a, b) => b.missedAppointments - a.missedAppointments);
+        rows.sort((a, b) => {
+            if (b.missedAppointments !== a.missedAppointments) {
+                return b.missedAppointments - a.missedAppointments;
+            }
+            const aMissed = parseDentrixDate(a.lastMissedDate)?.getTime() ?? 0;
+            const bMissed = parseDentrixDate(b.lastMissedDate)?.getTime() ?? 0;
+            return bMissed - aMissed;
+        });
 
         return rows;
     }, [patientInfoById, patientsById, latestAppointmentByPatientId, trackingByPatientId]);
@@ -318,6 +334,19 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
         setBookingDraft({ date: '', type: '' });
     };
 
+    const recallReasonOptions = getNotRebookedReasonOptionsForQueue(NO_APPT_BOOKED_QUEUE_ID);
+
+    const removeFromList = async (
+        item: DentrixFollowUpWorkItem & { trackingId: string; tracking?: FollowUpTrackingDoc }
+    ) => {
+        setUpdatingId(item.patientId);
+        await upsertTracking(item, {
+            removedFromList: true,
+            removedAt: new Date().toISOString(),
+        });
+        setUpdatingId(null);
+    };
+
     const selectedForNote = items.find((x) => x.patientId === activeNoteId);
     const selectedForBooking = items.find((x) => x.patientId === bookingId);
 
@@ -409,7 +438,10 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
                         <table className="w-full text-left border-collapse min-w-[1280px]">
                             <thead className="sticky top-0 z-10 bg-slate-50">
                                 <tr className="border-b border-slate-100/50">
-                                    <th className="p-6 text-[10px] font-black text-slate-300 uppercase tracking-[0.2em] pl-10">
+                                    <th className="p-6 text-[10px] font-black text-slate-300 uppercase tracking-[0.2em] w-12 pl-6">
+                                        <span className="sr-only">Remove</span>
+                                    </th>
+                                    <th className="p-6 text-[10px] font-black text-slate-300 uppercase tracking-[0.2em] pl-4">
                                         Patient
                                         <span className="block font-normal normal-case text-[9px] text-slate-400 tracking-normal mt-1">
                                             Tap name for contact card
@@ -428,7 +460,19 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
                             <tbody className="divide-y divide-slate-50">
                                 {filtered.map((item) => (
                                     <tr key={item.patientId} className="hover:bg-slate-50/50 transition-colors group">
-                                        <td className="p-6 pl-10">
+                                        <td className="p-6 pl-6 align-top">
+                                            <button
+                                                type="button"
+                                                title="Remove from list"
+                                                aria-label={`Remove ${item.patientName} from list`}
+                                                disabled={!!updatingId}
+                                                onClick={() => void removeFromList(item)}
+                                                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-rose-200 text-rose-600 hover:bg-rose-50 disabled:opacity-40"
+                                            >
+                                                <UserX className="h-4 w-4" />
+                                            </button>
+                                        </td>
+                                        <td className="p-6 pl-4">
                                             <PatientProfileTrigger patientId={item.patientId}>
                                                 <div className="text-xs font-black text-slate-900 uppercase tracking-tighter truncate leading-none">
                                                     {item.patientName}
@@ -448,10 +492,11 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
                                                     void upsertTracking(item, {
                                                         notRebookedReason: value || undefined,
                                                         notRebookedReasonAt: value ? new Date().toISOString() : undefined,
+                                                        ...queueReasonRemovalPatch(NO_APPT_BOOKED_QUEUE_ID, value),
                                                     });
                                                 }}
                                             >
-                                                {NOT_REBOOKED_REASON_OPTIONS.map((o) => (
+                                                {recallReasonOptions.map((o) => (
                                                     <option key={o.value || 'empty'} value={o.value}>
                                                         {o.label}
                                                     </option>

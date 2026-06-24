@@ -48,7 +48,7 @@ export const ESTIMATE_ACTION_LABELS: Record<EstimateFollowUpAction, string> = {
   treatment_finished: 'Treatment finished',
   removed_from_list: 'Remove from list',
   no_answer: 'No answer',
-  patient_declined: 'Patient declined',
+  patient_declined: 'Patient/parent declined',
 };
 
 export interface EstimateActionHistoryEntry {

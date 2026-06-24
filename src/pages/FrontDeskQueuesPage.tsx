@@ -33,7 +33,7 @@ import type { DentrixAppointmentDoc, DentrixPatientDoc, DentrixPatientAppointmen
 import { PatientProfileTrigger } from '../components/PatientProfileTrigger';
 import { QUEUE_ROW_TRACKING_COLLECTION, queueTrackingDocId } from '../lib/queueRowTracking';
 import type { QueueRowTrackingDoc } from '../lib/queueRowTracking';
-import { getNotRebookedReasonOptionsForQueue } from '../lib/notRebookedReasons';
+import { getNotRebookedReasonOptionsForQueue, queueReasonRemovalPatch } from '../lib/notRebookedReasons';
 import { APPOINTMENTS_QUERY_LIMIT, FUTURE_APPOINTMENTS_QUERY_LIMIT, mergeAppointmentsById } from '../lib/appointmentsQuery';
 import { format, startOfDay } from 'date-fns';
 import { Search } from 'lucide-react';
@@ -74,6 +74,20 @@ const WEEK_OPTIONS: { id: VisitWeekBucketFilter; label: string }[] = [
 ];
 
 const USE_WEEK_FILTER = new Set(['emerg_follow_up', 'new_patient_follow_up']);
+
+const HIDE_MONTHS_AGO_QUEUES = new Set(['extraction']);
+
+function trackingYesNoValue(value: boolean | undefined): '' | 'yes' | 'no' {
+  if (value === true) return 'yes';
+  if (value === false) return 'no';
+  return '';
+}
+
+function parseTrackingYesNo(value: string): boolean | undefined {
+  if (value === 'yes') return true;
+  if (value === 'no') return false;
+  return undefined;
+}
 
 type ReferralProgressFilter = 'all' | 'needs_update';
 
@@ -444,6 +458,10 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
 
   const reasonOptions = getNotRebookedReasonOptionsForQueue(activeId);
   const reasonDisabled = (rebooked: boolean | undefined) => activeId === 'no_shows_past_week' && rebooked === true;
+  const showRootCanalTracking = activeId === 'root_canal';
+  const showMonthsAgo =
+    activeId !== 'no_shows_past_week' && !showRootCanalTracking && !HIDE_MONTHS_AGO_QUEUES.has(activeId);
+  const showProvider = activeId !== 'no_shows_past_week' && !showRootCanalTracking;
 
   const showMainLoader = isNoApptBookedQueue ? false : isReferralQueue ? !referralsReady : loading || ledgerLoading;
 
@@ -766,10 +784,15 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
                   <th className="p-3">Last appt</th>
                   {activeId === 'no_shows_past_week' ? (
                     <th className="p-3">Rebooked?</th>
+                  ) : showRootCanalTracking ? (
+                    <>
+                      <th className="p-3">Referred to specialist</th>
+                      <th className="p-3">Follow-up appt booked</th>
+                    </>
                   ) : (
                     <>
-                      <th className="p-3">Mo ago</th>
-                      <th className="p-3">Provider</th>
+                      {showMonthsAgo ? <th className="p-3">Mo ago</th> : null}
+                      {showProvider ? <th className="p-3">Provider</th> : null}
                     </>
                   )}
                   <th className="p-3 min-w-[140px]">Why not rebooked</th>
@@ -803,18 +826,59 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
                               {row.rebooked ? 'Rebooked' : 'Not rebooked'}
                             </span>
                           </td>
+                        ) : showRootCanalTracking ? (
+                          <>
+                            <td className="p-3">
+                              <select
+                                className="w-full max-w-[88px] h-9 rounded-md border border-slate-200 text-[10px] font-bold uppercase bg-white disabled:opacity-40"
+                                disabled={savingApptId === row.appointmentFirestoreId}
+                                value={trackingYesNoValue(tr?.referredToSpecialist)}
+                                onChange={(e) => {
+                                  const next = parseTrackingYesNo(e.target.value);
+                                  persistTracking(row.appointmentFirestoreId, row.patientId, {
+                                    referredToSpecialist: next,
+                                  });
+                                }}
+                              >
+                                <option value="">—</option>
+                                <option value="yes">Yes</option>
+                                <option value="no">No</option>
+                              </select>
+                            </td>
+                            <td className="p-3">
+                              <select
+                                className="w-full max-w-[88px] h-9 rounded-md border border-slate-200 text-[10px] font-bold uppercase bg-white disabled:opacity-40"
+                                disabled={savingApptId === row.appointmentFirestoreId}
+                                value={trackingYesNoValue(tr?.followUpAppointmentBooked)}
+                                onChange={(e) => {
+                                  const next = parseTrackingYesNo(e.target.value);
+                                  persistTracking(row.appointmentFirestoreId, row.patientId, {
+                                    followUpAppointmentBooked: next,
+                                  });
+                                }}
+                              >
+                                <option value="">—</option>
+                                <option value="yes">Yes</option>
+                                <option value="no">No</option>
+                              </select>
+                            </td>
+                          </>
                         ) : (
                           <>
-                            <td className="p-3 text-xs text-slate-600 tabular-nums">
-                              {row.monthsSince != null ? `${row.monthsSince} mo` : '—'}
-                              {row.recallIntervalMonths != null && (
-                                <p className="text-[9px] text-slate-400 font-bold mt-0.5">
-                                  {row.recallIntervalMonths} mo recall
-                                  {row.isOverdue ? ' · overdue' : ''}
-                                </p>
-                              )}
-                            </td>
-                            <td className="p-3 text-xs text-slate-500">{row.provider ?? '—'}</td>
+                            {showMonthsAgo ? (
+                              <td className="p-3 text-xs text-slate-600 tabular-nums">
+                                {row.monthsSince != null ? `${row.monthsSince} mo` : '—'}
+                                {row.recallIntervalMonths != null && (
+                                  <p className="text-[9px] text-slate-400 font-bold mt-0.5">
+                                    {row.recallIntervalMonths} mo recall
+                                    {row.isOverdue ? ' · overdue' : ''}
+                                  </p>
+                                )}
+                              </td>
+                            ) : null}
+                            {showProvider ? (
+                              <td className="p-3 text-xs text-slate-500">{row.provider ?? '—'}</td>
+                            ) : null}
                           </>
                         )}
                         <td className="p-3">
@@ -827,6 +891,7 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
                               persistTracking(row.appointmentFirestoreId, row.patientId, {
                                 notRebookedReason: value || undefined,
                                 notRebookedReasonAt: value ? new Date().toISOString() : undefined,
+                                ...queueReasonRemovalPatch(activeId, value),
                               });
                             }}
                           >

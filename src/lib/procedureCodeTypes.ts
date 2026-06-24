@@ -528,6 +528,31 @@ export function hasDisplayableEstimateCodeType(ctx: DocumentProcedureContext): b
   return ctx.procedureCodes.length > 0;
 }
 
+/** Drop procedure codes already covered by an associated EOB / claim acknowledgment. */
+export function excludeProcedureCodesFromContext(
+  ctx: DocumentProcedureContext,
+  excludeCodes: Set<string>,
+  coverageByPlanId: Map<number, DentrixCoverageTableDoc[]> = new Map()
+): DocumentProcedureContext | null {
+  if (!excludeCodes.size) return ctx;
+
+  const procedureCodes = ctx.procedureCodes.filter((c) => !excludeCodes.has(c.code));
+  if (!procedureCodes.length) return null;
+
+  const mergedCodes = procedureCodes.map((c) => c.code);
+  const codeTypes = resolveCodeTypesForCodes(mergedCodes, {
+    planId: ctx.insurancePlanId,
+    coverageByPlanId,
+  });
+
+  return {
+    ...ctx,
+    procedureCodes,
+    codeTypes,
+    primaryCodeType: codeTypes[0] ?? null,
+  };
+}
+
 function resolveTreatmentPlannedLedgerCodes(
   patientId: string,
   ledgerRows: DentrixLedgerTransactionDoc[],

@@ -17,6 +17,7 @@ import {
   ESTIMATE_CODE_TYPE_GROUPS,
   buildDocumentProcedureContext,
   buildInsuredByPatientGuidMap,
+  excludeProcedureCodesFromContext,
   formatCodeTypeLabel,
   formatProcedureCodesSummary,
   hasDisplayableEstimateCodeType,
@@ -50,6 +51,7 @@ import { PatientProfileTrigger } from '../components/PatientProfileTrigger';
 import {
   buildDocIdToPatientIdMap,
   buildDocumentEstimateWorkItems,
+  collectCodesCoveredByPredeterminationResponses,
   filterEstimateCandidateDocuments,
   fetchEstimateDocuments,
   DEFAULT_ESTIMATE_AGE_BUCKET,
@@ -287,6 +289,19 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
 
   const docIdToPatientId = useMemo(() => buildDocIdToPatientIdMap(attachments), [attachments]);
 
+  const documentsByPatientId = useMemo(() => {
+    const map = new Map<string, DentrixDocumentDoc[]>();
+    for (const document of documents) {
+      const docId = Number(document.docid ?? document.id);
+      const patientId = docIdToPatientId.get(docId);
+      if (!patientId) continue;
+      const list = map.get(patientId) ?? [];
+      list.push(document);
+      map.set(patientId, list);
+    }
+    return map;
+  }, [documents, docIdToPatientId]);
+
   useEffect(() => {
     const patientIds = [...new Set(docIdToPatientId.values())];
     if (patientIds.length === 0) {
@@ -475,18 +490,40 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
   ): DocumentEstimateRow | null => {
     const fu = followUps[d.followUpDocId];
     const patientLedger = ledgerByPatientId.get(Number(d.patientId)) ?? [];
-    const fullContext = buildDocumentProcedureContext({
-      descript: d.descript,
-      patientId: d.patientId,
-      patientGuid: d.patientGuid,
-      documentDate: d.createdate,
-      ledgerRows: patientLedger,
-      insuranceClaims: claimsByPatientId.get(Number(d.patientId)) ?? [],
-      procedureCodes,
-      insuredByGuid,
-      coverageByPlanId,
-      estimateSent: !!estimateSentByPatientId[d.patientId],
-    });
+    const patientClaims = claimsByPatientId.get(Number(d.patientId)) ?? [];
+    const buildProcedureContextForDocument = (descript: string, documentDate?: string | null) =>
+      buildDocumentProcedureContext({
+        descript,
+        patientId: d.patientId,
+        patientGuid: d.patientGuid,
+        documentDate,
+        ledgerRows: patientLedger,
+        insuranceClaims: patientClaims,
+        procedureCodes,
+        insuredByGuid,
+        coverageByPlanId,
+        estimateSent: !!estimateSentByPatientId[d.patientId],
+      });
+
+    let fullContext = buildProcedureContextForDocument(d.descript, d.createdate);
+
+    if (d.workflowStatus === 'needs_follow_up') {
+      const coveredCodes = collectCodesCoveredByPredeterminationResponses({
+        predAckDescript: d.descript,
+        predAckContext: fullContext,
+        patientDocuments: documentsByPatientId.get(d.patientId) ?? [],
+        resolveResponseContext: (descript) => buildProcedureContextForDocument(descript),
+      });
+      if (coveredCodes.size) {
+        const withoutCovered = excludeProcedureCodesFromContext(
+          fullContext,
+          coveredCodes,
+          coverageByPlanId
+        );
+        if (!withoutCovered) return null;
+        fullContext = withoutCovered;
+      }
+    }
 
     const activeGroupId =
       codeTypeFilter !== ESTIMATE_CODE_TYPE_FILTER_ALL
@@ -590,6 +627,7 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
     ageBucket,
     adaByProccodeId,
     estimateSentByPatientId,
+    documentsByPatientId,
   ]);
 
   const matchesCodeTypeFilter = useCallback((row: DocumentEstimateRow) => {

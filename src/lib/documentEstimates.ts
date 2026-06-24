@@ -10,6 +10,8 @@ import {
   type QueryDocumentSnapshot,
 } from 'firebase/firestore';
 import { cleanDentrixText, formatDentrixDateKey, formatPatientFullName, parseDentrixDate, type DentrixPatientDoc } from './dentrix';
+import { extractLedgerIdCandidates } from './ledgerTransactions';
+import type { DocumentProcedureContext } from './procedureCodeTypes';
 
 /** Firestore hard cap per query. */
 export const FIRESTORE_QUERY_LIMIT_MAX = 10000;
@@ -188,6 +190,80 @@ export function isPredeterminationExplanationOfBenefits(descript: string): boole
     d.includes('predetermination') &&
     (d.includes('explanation of benefits') || d.includes('explanation of benefit'))
   );
+}
+
+/** Claim acknowledgment documents are excluded from estimate tabs but can close pred-ack codes. */
+export function isClaimAcknowledgement(descript: string): boolean {
+  const d = descript.trim().toLowerCase();
+  if (d.includes('explanation')) return false;
+  if (d.includes('pre-determination') || d.includes('predetermination')) return false;
+  return d.includes('claim acknowledgment') || d.includes('claim acknowledgement');
+}
+
+/** EOB or claim acknowledgment tied to a predetermination request. */
+export function isPredeterminationResponseDocument(descript: string): boolean {
+  const status = classifyDocumentEstimateStatus(descript);
+  return status === 'covered_eob' || isClaimAcknowledgement(descript);
+}
+
+/** Whether a response document (EOB / claim ack) references the same predetermination as the ack row. */
+export function documentsSharePredeterminationAssociation(
+  predAckContext: DocumentProcedureContext,
+  responseContext: DocumentProcedureContext,
+  predAckDescript: string,
+  responseDescript: string
+): boolean {
+  const predPreauth = Number(predAckContext.preauthId) || 0;
+  const respPreauth = Number(responseContext.preauthId) || 0;
+  if (predPreauth > 0 && predPreauth === respPreauth) return true;
+
+  const predClaim = Number(predAckContext.claimId) || 0;
+  const respClaim = Number(responseContext.claimId) || 0;
+  if (predClaim > 0 && predClaim === respClaim) return true;
+
+  const predIds = new Set(extractLedgerIdCandidates(predAckDescript));
+  const responseIds = extractLedgerIdCandidates(responseDescript);
+  if (!predIds.size && !responseIds.length) return false;
+
+  for (const id of responseIds) {
+    if (predIds.has(id)) return true;
+    if (predPreauth === id || predClaim === id) return true;
+  }
+  for (const id of predIds) {
+    if (respPreauth === id || respClaim === id) return true;
+  }
+  return false;
+}
+
+/** Procedure codes on associated EOB / claim-ack documents for this predetermination ack. */
+export function collectCodesCoveredByPredeterminationResponses(options: {
+  predAckDescript: string;
+  predAckContext: DocumentProcedureContext;
+  patientDocuments: Pick<DentrixDocumentDoc, 'descript'>[];
+  resolveResponseContext: (descript: string) => DocumentProcedureContext;
+}): Set<string> {
+  const covered = new Set<string>();
+  for (const doc of options.patientDocuments) {
+    const descript = cleanDentrixText(doc.descript) || '';
+    if (!isPredeterminationResponseDocument(descript)) continue;
+
+    const responseContext = options.resolveResponseContext(descript);
+    if (
+      !documentsSharePredeterminationAssociation(
+        options.predAckContext,
+        responseContext,
+        options.predAckDescript,
+        descript
+      )
+    ) {
+      continue;
+    }
+
+    for (const row of responseContext.procedureCodes) {
+      covered.add(row.code);
+    }
+  }
+  return covered;
 }
 
 export function classifyDocumentEstimateStatus(descript: string): DocumentEstimateWorkflowStatus {

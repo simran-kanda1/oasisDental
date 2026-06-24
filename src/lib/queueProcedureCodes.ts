@@ -55,13 +55,6 @@ export const QUEUE_PROCEDURE_CONFIGS: QueueProcedureConfig[] = [
     ],
   },
   {
-    queueId: 'periodontal_surgery',
-    codeRules: [
-      { type: 'range', begin: '42111', end: '42481' },
-      { type: 'codes', codes: ['42811', '42819'] },
-    ],
-  },
-  {
     queueId: 'tmj_mri',
     codeRules: [
       { type: 'range', begin: 'M0000020', end: 'M0000026' },

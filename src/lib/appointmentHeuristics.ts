@@ -71,6 +71,31 @@ export function appointmentLabelText(a: DentrixAppointmentDoc): string {
   return parts.join(' ').toLowerCase();
 }
 
+/** Oasis hygiene appointment production types (Dentrix appointment category). */
+export const HYGIENE_PRODUCTION_TYPES = ['HYG1', 'HYG2', 'HYRA', 'HYCP'] as const;
+
+const HYGIENE_PRODUCTION_TYPE_RE = /\b(HYG1|HYG2|HYRA|HYCP)\b/i;
+
+/** True when the appointment category is a hygiene production type. */
+export function isHygieneProductionType(a: DentrixAppointmentDoc): boolean {
+  const extra = a as DentrixAppointmentDoc & {
+    production_type_desc?: string;
+    production_type_abbr?: string;
+    production_type_code?: string;
+  };
+  const text = [
+    cleanDentrixText(a.appointment_type),
+    cleanDentrixText(a.appt_type),
+    cleanDentrixText(a.appointmentType),
+    cleanDentrixText(extra.production_type_desc),
+    cleanDentrixText(extra.production_type_abbr),
+    cleanDentrixText(extra.production_type_code),
+  ]
+    .filter(Boolean)
+    .join(' ');
+  return HYGIENE_PRODUCTION_TYPE_RE.test(text);
+}
+
 /** Dentrix / practice varies — broaden matchers and tune status_id if needed */
 export function isAppointmentNoShow(a: DentrixAppointmentDoc): boolean {
   const s = appointmentLabelText(a);
