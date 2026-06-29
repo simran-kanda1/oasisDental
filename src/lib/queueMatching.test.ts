@@ -542,6 +542,23 @@ describe('recall interval queue filtering', () => {
     expect(pastOnly).toHaveLength(0);
   });
 
+  it('lists upcoming GA from appointment text when procedures are not coded yet', () => {
+    const appts: DentrixAppointmentDoc[] = [
+      {
+        id: 'ga-future-text',
+        patient_id: 1,
+        patient_name: 'Test Patient',
+        appointment_date: '2026-08-01T10:00:00Z',
+        reason: 'General anesthesia',
+        appointment_type: 'IV sedation',
+      },
+    ];
+    const rows = buildQueueRows(GA_ALL_APPOINTMENTS_QUEUE_ID, appts, patientsById, 0, now, 'all', 'all', {
+      gaTimeFilter: 'upcoming_4mo',
+    });
+    expect(rows).toHaveLength(1);
+  });
+
   it('excludes GA appointments more than four months in the future', () => {
     const procedureCodes = [{ id: '1', proccodeid: 922, adacode: '92222', descript: 'GA' }];
     const appts: DentrixAppointmentDoc[] = [

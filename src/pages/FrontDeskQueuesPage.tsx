@@ -122,7 +122,7 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
   }, [initialQueueId]);
   const [ageBucket, setAgeBucket] = useState<AgeBucketFilter>(DEFAULT_AGE_BUCKET);
   const [visitWeekBucket, setVisitWeekBucket] = useState<VisitWeekBucketFilter>(DEFAULT_WEEK_BUCKET);
-  const [gaTimeFilter, setGaTimeFilter] = useState<GaAppointmentTimeFilter>('past');
+  const [gaTimeFilter, setGaTimeFilter] = useState<GaAppointmentTimeFilter>('all');
   const [noteDraftByApptId, setNoteDraftByApptId] = useState<Record<string, string>>({});
   const [savingApptId, setSavingApptId] = useState<string | null>(null);
   const [saveNoticeApptId, setSaveNoticeApptId] = useState<string | null>(null);

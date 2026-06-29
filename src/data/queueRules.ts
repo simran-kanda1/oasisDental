@@ -421,6 +421,34 @@ function appointmentMatchesNewPatient(
   return matchesNewPatientAppointmentText(appointmentLabelText(appt));
 }
 
+function isUpcomingOrTodayAppointment(appt: DentrixAppointmentDoc, today: Date): boolean {
+  const d = parseDentrixDate(appt.appointment_date);
+  if (!d) return false;
+  return !isBefore(startOfDay(d), startOfDay(today));
+}
+
+/** GA: posted visits need ADA codes; upcoming scheduled visits also match GA keywords in appointment text. */
+function appointmentMatchesGa(
+  appt: DentrixAppointmentDoc,
+  ctx: QueueBuildContext,
+  indexes: QueueBuildIndexes,
+  today = new Date()
+): boolean {
+  const procedureCodes = ctx.procedureCodes ?? [];
+  if (procedureCodes.length > 0) {
+    if (appointmentMatchesQueueByProcedureCodes(appt, GA_ALL_APPOINTMENTS_QUEUE_ID, ctx, indexes)) {
+      return true;
+    }
+  }
+
+  if (isUpcomingOrTodayAppointment(appt, today)) {
+    const label = appointmentLabelText(appt);
+    if (KEYWORD_MATCHERS.ga_all_appointments?.(label)) return true;
+  }
+
+  return false;
+}
+
 /** Established patients had any visit before the qualifying appointment day. */
 function patientHadPriorAppointmentBeforeVisit(
   patientId: string,
@@ -466,6 +494,10 @@ function appointmentMatchesQueue(
 
   if (queueId === 'new_patient_follow_up') {
     return appointmentMatchesNewPatient(appt, ctx, indexes);
+  }
+
+  if (queueId === GA_ALL_APPOINTMENTS_QUEUE_ID) {
+    return appointmentMatchesGa(appt, ctx, indexes);
   }
 
   const config = getQueueProcedureConfig(queueId);
@@ -826,7 +858,7 @@ export function buildQueueRows(
   });
 
   if (queueId === GA_ALL_APPOINTMENTS_QUEUE_ID) {
-    const gaTimeFilter = ctx.gaTimeFilter ?? 'past';
+    const gaTimeFilter = ctx.gaTimeFilter ?? 'all';
     return buildGaAllAppointmentsQueue(
       ctx,
       apptsForActivePatients,
@@ -941,7 +973,7 @@ export function buildQueueRowCount(
   });
 
   if (queueId === GA_ALL_APPOINTMENTS_QUEUE_ID) {
-    const gaTimeFilter = ctx.gaTimeFilter ?? 'past';
+    const gaTimeFilter = ctx.gaTimeFilter ?? 'all';
     const day = startOfDay(now);
     const lookaheadEnd = addMonths(day, GA_APPOINTMENTS_LOOKAHEAD_MONTHS);
     let count = 0;
