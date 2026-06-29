@@ -16,6 +16,8 @@ export interface QueueRowTrackingDoc {
   treatmentCompleteAt?: string;
   referredToSpecialist?: boolean;
   followUpAppointmentBooked?: boolean;
+  startTreatment?: boolean;
+  depositTaken?: boolean;
 }
 
 export function queueTrackingDocId(appointmentFirestoreId: string): string {

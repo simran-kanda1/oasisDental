@@ -1,5 +1,5 @@
 import React, { createContext, startTransition, useContext, useEffect, useMemo, useState } from 'react';
-import { collection, onSnapshot, orderBy, query, limit, where } from 'firebase/firestore';
+import { collection, onSnapshot } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { isOpenWixInquiryDoc } from '../lib/wixInquiryCounts';
 import {
@@ -17,15 +17,9 @@ import {
   computeFrontDeskQueueCounts,
   frontDeskQueueTotal,
 } from '../lib/navBadgeCounts';
-import { APPOINTMENTS_QUERY_LIMIT, FUTURE_APPOINTMENTS_QUERY_LIMIT, mergeAppointmentsById } from '../lib/appointmentsQuery';
-import { format, startOfDay } from 'date-fns';
-import { fetchLedgerForPatients } from '../lib/ledgerTransactions';
-import type { DentrixLedgerTransactionDoc } from '../lib/ledgerTransactions';
-import { QUEUE_ROW_TRACKING_COLLECTION, type QueueRowTrackingDoc } from '../lib/queueRowTracking';
-import type { DentrixAppointmentDoc, DentrixPatientAppointmentInfoDoc, DentrixPatientDoc } from '../lib/dentrix';
-import type { DentrixProcedureCodeDoc } from '../lib/procedureCodeTypes';
+import { useFrontDeskData } from './FrontDeskDataContext';
 
-const BADGE_LEDGER_PATIENT_CAP = 2500;
+const BADGE_RECOMPUTE_DEBOUNCE_MS = 300;
 
 export interface NavBadgeState {
   openInquiries: number;
@@ -52,18 +46,20 @@ const defaultState: NavBadgeState = {
 const NavBadgeContext = createContext<NavBadgeState>(defaultState);
 
 export const NavBadgeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const {
+    allAppointments,
+    patientsById,
+    patientInfoById,
+    procedureCodes,
+    trackingByApptId,
+    ledgerByPatientId,
+  } = useFrontDeskData();
+
   const [openInquiries, setOpenInquiries] = useState(0);
   const [hiddenInquiries, setHiddenInquiries] = useState(0);
   const [estimatePredApproved, setEstimatePredApproved] = useState(0);
   const [estimatePredFollowUp, setEstimatePredFollowUp] = useState(0);
   const [estimatesReady, setEstimatesReady] = useState(false);
-  const [appointments, setAppointments] = useState<DentrixAppointmentDoc[]>([]);
-  const [futureAppointments, setFutureAppointments] = useState<DentrixAppointmentDoc[]>([]);
-  const [patientsById, setPatientsById] = useState<Record<string, DentrixPatientDoc>>({});
-  const [patientInfoById, setPatientInfoById] = useState<Record<string, DentrixPatientAppointmentInfoDoc>>({});
-  const [procedureCodes, setProcedureCodes] = useState<DentrixProcedureCodeDoc[]>([]);
-  const [trackingByApptId, setTrackingByApptId] = useState<Record<string, QueueRowTrackingDoc>>({});
-  const [ledgerByPatientId, setLedgerByPatientId] = useState<Map<number, DentrixLedgerTransactionDoc[]>>(new Map());
   const [frontDeskByQueue, setFrontDeskByQueue] = useState<Record<string, number>>({});
   const [badgesReady, setBadgesReady] = useState(false);
 
@@ -85,6 +81,8 @@ export const NavBadgeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   }, []);
 
   useEffect(() => {
+    if (!badgesReady) return;
+
     let cancelled = false;
 
     const loadEstimateBadges = () => {
@@ -127,101 +125,21 @@ export const NavBadgeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         });
     };
 
-    const timer = window.setTimeout(() => {
-      if (typeof window.requestIdleCallback === 'function') {
-        window.requestIdleCallback(loadEstimateBadges, { timeout: 4000 });
-      } else {
-        loadEstimateBadges();
-      }
-    }, 500);
+    if (typeof window.requestIdleCallback === 'function') {
+      const idleId = window.requestIdleCallback(loadEstimateBadges, { timeout: 6000 });
+      return () => {
+        cancelled = true;
+        window.cancelIdleCallback(idleId);
+      };
+    }
 
+    const timer = window.setTimeout(loadEstimateBadges, 500);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, []);
+  }, [badgesReady]);
 
-  const allAppointments = useMemo(
-    () => mergeAppointmentsById(appointments, futureAppointments),
-    [appointments, futureAppointments]
-  );
-
-  useEffect(() => {
-    const todayStart = format(startOfDay(new Date()), "yyyy-MM-dd'T'00:00:00'Z'");
-    const unsubA = onSnapshot(
-      query(collection(db, 'appointments'), orderBy('appointment_date', 'desc'), limit(APPOINTMENTS_QUERY_LIMIT)),
-      (snap) => setAppointments(snap.docs.map((d) => ({ id: d.id, ...d.data() } as DentrixAppointmentDoc)))
-    );
-    const unsubFuture = onSnapshot(
-      query(
-        collection(db, 'appointments'),
-        where('appointment_date', '>=', todayStart),
-        orderBy('appointment_date', 'asc'),
-        limit(FUTURE_APPOINTMENTS_QUERY_LIMIT)
-      ),
-      (snap) => setFutureAppointments(snap.docs.map((d) => ({ id: d.id, ...d.data() } as DentrixAppointmentDoc)))
-    );
-    const unsubP = onSnapshot(collection(db, 'patients'), (snap) => {
-      const map: Record<string, DentrixPatientDoc> = {};
-      snap.docs.forEach((d) => {
-        const row = { id: d.id, ...d.data() } as DentrixPatientDoc;
-        map[String(row.patient_id ?? row.id)] = row;
-      });
-      setPatientsById(map);
-    });
-    const unsubInfo = onSnapshot(collection(db, 'patient_appointment_info'), (snap) => {
-      const map: Record<string, DentrixPatientAppointmentInfoDoc> = {};
-      snap.docs.forEach((d) => {
-        const row = { id: d.id, ...d.data() } as DentrixPatientAppointmentInfoDoc;
-        map[String(row.patient_id ?? row.id)] = row;
-      });
-      setPatientInfoById(map);
-    });
-    const unsubProc = onSnapshot(collection(db, 'procedure_codes'), (snap) => {
-      setProcedureCodes(snap.docs.map((d) => ({ id: d.id, ...d.data() } as DentrixProcedureCodeDoc)));
-    });
-    const unsubTracking = onSnapshot(collection(db, QUEUE_ROW_TRACKING_COLLECTION), (snap) => {
-      const map: Record<string, QueueRowTrackingDoc> = {};
-      snap.docs.forEach((d) => {
-        map[d.id] = { ...(d.data() as QueueRowTrackingDoc), appointmentId: d.id };
-      });
-      setTrackingByApptId(map);
-    });
-    return () => {
-      unsubA();
-      unsubFuture();
-      unsubP();
-      unsubInfo();
-      unsubProc();
-      unsubTracking();
-    };
-  }, []);
-
-  useEffect(() => {
-    const ids: string[] = [];
-    const seen = new Set<string>();
-    for (const a of allAppointments) {
-      const pid = String(a.patient_id ?? '');
-      if (!pid || seen.has(pid)) continue;
-      seen.add(pid);
-      ids.push(pid);
-      if (ids.length >= BADGE_LEDGER_PATIENT_CAP) break;
-    }
-    if (!ids.length) {
-      setLedgerByPatientId(new Map());
-      return;
-    }
-
-    let cancelled = false;
-    void fetchLedgerForPatients(ids).then((map) => {
-      if (!cancelled) setLedgerByPatientId(map);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [allAppointments]);
-
-  // Defer badge counts so Firestore snapshots cannot block auth / first paint.
   useEffect(() => {
     let cancelled = false;
     const timer = window.setTimeout(() => {
@@ -244,7 +162,8 @@ export const NavBadgeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       } else {
         run();
       }
-    }, 80);
+    }, BADGE_RECOMPUTE_DEBOUNCE_MS);
+
     return () => {
       cancelled = true;
       window.clearTimeout(timer);

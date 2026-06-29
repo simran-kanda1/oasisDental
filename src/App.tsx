@@ -1,10 +1,11 @@
 import React, { Suspense, lazy, useEffect, useMemo } from 'react';
 import { BrowserRouter, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { FrontDeskDataProvider } from './contexts/FrontDeskDataContext';
 import { NavBadgeProvider } from './contexts/NavBadgeContext';
 import { PatientProfileProvider } from './contexts/PatientProfileContext';
 import { Sidebar, TopBar } from './components/layout/Sidebar';
-import { AppLoadingSkeleton } from './components/ui/skeleton';
+import { AppLoadingSkeleton, PageLoadingFallback } from './components/ui/skeleton';
 import { pathToSection, DEFAULT_AUTHENTICATED_PATH, DEFAULT_STAFF_PATH, sectionToPath } from './lib/routes';
 import { registerAppNavigator, type AppSection } from './lib/navigation';
 import { NO_APPT_BOOKED_QUEUE_ID } from './data/queueRules';
@@ -19,18 +20,6 @@ const EstimatesPage = lazy(() => import('./pages/EstimatesPage'));
 const AdminPortalPage = lazy(() => import('./pages/AdminPortalPage'));
 const StaffTasksPage = lazy(() => import('./pages/StaffTasksPage'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
-
-const PageFallback = () => (
-  <div className="p-4 space-y-4 max-w-full mx-auto">
-    <div className="h-16 rounded-md bg-slate-200/80 animate-pulse" />
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-      {Array.from({ length: 4 }).map((_, i) => (
-        <div key={i} className="h-20 rounded-md bg-slate-200/60 animate-pulse" />
-      ))}
-    </div>
-    <div className="h-64 rounded-md bg-slate-200/50 animate-pulse" />
-  </div>
-);
 
 const AppShell: React.FC = () => {
   const { user, loading, isAdmin } = useAuth();
@@ -111,17 +100,21 @@ const AppShell: React.FC = () => {
   };
 
   return (
-    <PatientProfileProvider>
-      <div className="min-h-screen bg-slate-50 flex font-sans text-slate-900 selection:bg-teal-100 selection:text-teal-900">
-        <Sidebar activeSection={section} activeQueueId={queueId} onSectionChange={handleSectionChange} />
-        <div className="flex-1 flex flex-col min-w-0">
-          <TopBar section={section} queueId={queueId} />
-          <main className="flex-1 overflow-auto bg-slate-50/50">
-            <Suspense fallback={<PageFallback />}>{renderPage()}</Suspense>
-          </main>
-        </div>
-      </div>
-    </PatientProfileProvider>
+    <FrontDeskDataProvider>
+      <NavBadgeProvider>
+        <PatientProfileProvider>
+          <div className="min-h-screen bg-slate-50 flex font-sans text-slate-900 selection:bg-teal-100 selection:text-teal-900">
+            <Sidebar activeSection={section} activeQueueId={queueId} onSectionChange={handleSectionChange} />
+            <div className="flex-1 flex flex-col min-w-0">
+              <TopBar section={section} queueId={queueId} />
+              <main className="flex-1 overflow-auto bg-slate-50/50">
+                <Suspense fallback={<PageLoadingFallback />}>{renderPage()}</Suspense>
+              </main>
+            </div>
+          </div>
+        </PatientProfileProvider>
+      </NavBadgeProvider>
+    </FrontDeskDataProvider>
   );
 };
 
@@ -129,9 +122,7 @@ function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
-        <NavBadgeProvider>
-          <AppShell />
-        </NavBadgeProvider>
+        <AppShell />
       </AuthProvider>
     </BrowserRouter>
   );

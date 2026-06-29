@@ -1,6 +1,6 @@
 import type { DentrixAppointmentDoc } from './dentrix';
 import { parseDentrixDate } from './dentrix';
-import { appointmentLabelText, isEstimateAppointment } from './appointmentHeuristics';
+import { appointmentLabelText, isEstimateAppointment, matchesNewPatientAppointmentText } from './appointmentHeuristics';
 import { addDays, isBefore, startOfDay, subDays, subMonths } from 'date-fns';
 
 export type PostVisitWindow = 'week' | 'month' | '3mo';
@@ -12,7 +12,7 @@ export function postVisitCategoryMatch(cat: PostVisitCategory, a: DentrixAppoint
     case 'emerg':
       return /\b(emerg|emergency|pain|swelling|walk[\s-]?in)\b/i.test(s);
     case 'np':
-      return /\b(new patient|np\b|new pt|initial exam|new pt exam|consultation)\b/i.test(s);
+      return matchesNewPatientAppointmentText(s);
     case 'ortho':
       return /\b(ortho|orthodont|braces|invisalign|aligner)\b/i.test(s);
     case 'estimate':

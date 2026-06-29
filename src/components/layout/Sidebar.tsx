@@ -4,7 +4,7 @@ import {
     LayoutDashboard, Calendar, MessageSquare,
     Menu, X, ChevronRight, LogOut, Bell,
     ShieldCheck, ListTodo, UsersRound, LayoutList, Settings,
-    Siren, UserPlus, Share2, HeartPulse, Loader2,
+    Siren, UserPlus, HeartPulse, Loader2,
 } from 'lucide-react';
 import { GlobalPatientSearch } from '../GlobalPatientSearch';
 import { Tooth } from '../ui/icons';
@@ -48,7 +48,6 @@ const navItems: NavItem[] = [
     { id: 'emerg_follow_up', label: 'Emerg patient follow up', icon: Siren, badge: 'queue', queueId: 'emerg_follow_up' },
     { id: 'new_patient_follow_up', label: 'New patient follow up', icon: UserPlus, badge: 'queue', queueId: 'new_patient_follow_up' },
     { id: GA_ALL_APPOINTMENTS_QUEUE_ID, label: 'GA appointments', icon: HeartPulse, badge: 'queue', queueId: GA_ALL_APPOINTMENTS_QUEUE_ID },
-    { id: 'referral_doctor_followup', label: 'Referrals', icon: Share2, badge: 'queue', queueId: 'referral_doctor_followup' },
     { id: 'followUpOutreach', label: 'Estimates', icon: UsersRound, badge: 'estimates' },
     { id: 'inquiries', label: 'Inquiries', icon: MessageSquare, badge: 'inquiries' },
 ];

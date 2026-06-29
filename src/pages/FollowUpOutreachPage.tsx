@@ -831,7 +831,10 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
 
     const closesList =
       enabled &&
-      (action === 'removed_from_list' || action === 'treatment_finished' || action === 'patient_declined');
+      (action === 'removed_from_list' ||
+        action === 'treatment_finished' ||
+        action === 'patient_declined' ||
+        action === 'watch');
 
     return {
       status: closesList ? 'closed' : 'estimate_followup',
@@ -843,7 +846,7 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
         closesList || (enabled && action === 'treatment_booked') ? true : prev?.nextAppointmentBooked === true,
       treatmentFinished: enabled && action === 'treatment_finished' ? true : prev?.treatmentFinished === true,
       removedFromList:
-        enabled && (action === 'removed_from_list' || action === 'patient_declined')
+        enabled && (action === 'removed_from_list' || action === 'patient_declined' || action === 'watch')
           ? true
           : prev?.removedFromList === true,
       bookedApptDate: extra?.bookedApptDate ?? prev?.bookedApptDate ?? null,
@@ -1236,6 +1239,16 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
                 onClick={() => void handleSnooze(r)}
               >
                 Snooze
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-7 text-[9px] font-black uppercase border-amber-300 text-amber-900"
+                disabled={busy}
+                onClick={() => void handleEstimateAction(r, 'watch', true)}
+              >
+                Watch
               </Button>
             </div>
             {saveNotice?.id === r.followUpDocId && (

@@ -61,7 +61,13 @@ export const QUEUE_PROCEDURE_CONFIGS: QueueProcedureConfig[] = [
       { type: 'range', begin: 'IM0000020', end: 'IM0000026' },
     ],
   },
-  { queueId: 'new_patient_follow_up', codeRules: [{ type: 'range', begin: '01101', end: '02601' }] },
+  {
+    queueId: 'new_patient_follow_up',
+    codeRules: [
+      { type: 'range', begin: '01401', end: '01699' },
+      { type: 'range', begin: '02101', end: '02601' },
+    ],
+  },
 ];
 
 const CONFIG_BY_QUEUE = new Map(QUEUE_PROCEDURE_CONFIGS.map((c) => [c.queueId, c]));

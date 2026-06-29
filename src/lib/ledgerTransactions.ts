@@ -13,6 +13,7 @@ export interface DentrixLedgerTransactionDoc {
   chartstatus?: number;
   preauthid?: number;
   claimid?: number;
+  adacode?: string;
   amt?: number;
   amtpriminspaid?: number;
   amtsecinspaid?: number;
@@ -43,29 +44,77 @@ export interface LedgerPreauthGroup {
 const ledgerCache = new Map<number, DentrixLedgerTransactionDoc[]>();
 const inflightLedger = new Map<number, Promise<DentrixLedgerTransactionDoc[]>>();
 
+const FIRESTORE_IN_QUERY_LIMIT = 30;
+const LEDGER_BATCH_CONCURRENCY = 4;
+
+function groupLedgerRowsByPatid(rows: DentrixLedgerTransactionDoc[]): Map<number, DentrixLedgerTransactionDoc[]> {
+  const grouped = new Map<number, DentrixLedgerTransactionDoc[]>();
+  for (const row of rows) {
+    const patid = Number(row.patid);
+    if (!Number.isFinite(patid)) continue;
+    const list = grouped.get(patid) ?? [];
+    list.push(row);
+    grouped.set(patid, list);
+  }
+  return grouped;
+}
+
+async function fetchLedgerBatch(patids: number[]): Promise<void> {
+  if (!patids.length) return;
+  const snap = await getDocs(
+    query(collection(db, 'ledger_transactions'), where('patid', 'in', patids))
+  );
+  const grouped = groupLedgerRowsByPatid(
+    snap.docs.map((d) => ({ id: d.id, ...d.data() } as DentrixLedgerTransactionDoc))
+  );
+  for (const patid of patids) {
+    const rows = grouped.get(patid) ?? [];
+    ledgerCache.set(patid, rows);
+    inflightLedger.delete(patid);
+  }
+}
+
 export async function fetchLedgerForPatients(patientIds: string[]): Promise<Map<number, DentrixLedgerTransactionDoc[]>> {
   const unique = [...new Set(patientIds.map((id) => Number(id)).filter((n) => Number.isFinite(n) && n > 0))];
   const out = new Map<number, DentrixLedgerTransactionDoc[]>();
+  const toFetch: number[] = [];
 
-  await Promise.all(
-    unique.map(async (patid) => {
-      if (ledgerCache.has(patid)) {
-        out.set(patid, ledgerCache.get(patid)!);
-        return;
-      }
-      let pending = inflightLedger.get(patid);
-      if (!pending) {
-        pending = getDocs(query(collection(db, 'ledger_transactions'), where('patid', '==', patid))).then((snap) => {
-          const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() } as DentrixLedgerTransactionDoc));
-          ledgerCache.set(patid, rows);
-          inflightLedger.delete(patid);
-          return rows;
-        });
-        inflightLedger.set(patid, pending);
-      }
-      out.set(patid, await pending);
-    })
-  );
+  for (const patid of unique) {
+    if (ledgerCache.has(patid)) {
+      out.set(patid, ledgerCache.get(patid)!);
+      continue;
+    }
+    if (inflightLedger.has(patid)) {
+      out.set(patid, await inflightLedger.get(patid)!);
+      continue;
+    }
+    toFetch.push(patid);
+  }
+
+  if (toFetch.length) {
+    const batches: number[][] = [];
+    for (let i = 0; i < toFetch.length; i += FIRESTORE_IN_QUERY_LIMIT) {
+      batches.push(toFetch.slice(i, i + FIRESTORE_IN_QUERY_LIMIT));
+    }
+
+    for (let i = 0; i < batches.length; i += LEDGER_BATCH_CONCURRENCY) {
+      const chunk = batches.slice(i, i + LEDGER_BATCH_CONCURRENCY);
+      await Promise.all(
+        chunk.map(async (patids) => {
+          const batchPromise = fetchLedgerBatch(patids);
+          for (const patid of patids) {
+            inflightLedger.set(patid, batchPromise.then(() => ledgerCache.get(patid) ?? []));
+          }
+          await batchPromise;
+        })
+      );
+    }
+
+    for (const patid of toFetch) {
+      out.set(patid, ledgerCache.get(patid) ?? []);
+      inflightLedger.delete(patid);
+    }
+  }
 
   return out;
 }

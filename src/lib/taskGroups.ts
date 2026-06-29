@@ -1,5 +1,5 @@
 /** Groups daily checklist items for the staff UI; also stored on materialized `tasks` as `taskGroup`. */
-export const TASK_GROUP_ORDER = ['daily', 'hygiene_cc', 'predeterminations', 'treatment_planner', 'specialty', 'new_patient', 'referrals', 'other'] as const;
+export const TASK_GROUP_ORDER = ['daily', 'hygiene_cc', 'predeterminations', 'treatment_planner', 'specialty', 'new_patient', 'other'] as const;
 
 export type TaskGroupId = (typeof TASK_GROUP_ORDER)[number];
 
@@ -10,7 +10,6 @@ export const TASK_GROUP_LABELS: Record<TaskGroupId, string> = {
   treatment_planner: 'Treatment planner',
   specialty: 'Ortho / TMJ / MRI',
   new_patient: 'New patient',
-  referrals: 'Referrals',
   other: 'Other',
 };
 
@@ -24,6 +23,6 @@ export function deriveTaskGroupFromTitle(title: string): TaskGroupId {
   if (t.includes('TREATMENT PLANNER')) return 'treatment_planner';
   if (t.includes('ORTHO') || t.includes('TMJ') || t.includes('MRI')) return 'specialty';
   if (t.includes('NEW PATIENT')) return 'new_patient';
-  if (t.includes('REFERAL') || t.includes('REFERRAL')) return 'referrals';
+  if (t.includes('REFERAL') || t.includes('REFERRAL')) return 'other';
   return 'other';
 }

@@ -16,6 +16,7 @@ import { PatientProfileTrigger } from '../components/PatientProfileTrigger';
 import { getNotRebookedReasonOptionsForQueue, queueReasonRemovalPatch, queueReasonRemovesFromList } from '../lib/notRebookedReasons';
 import { NO_APPT_BOOKED_QUEUE_ID } from '../data/queueRules';
 import { UserX } from 'lucide-react';
+import { useFrontDeskData } from '../contexts/FrontDeskDataContext';
 import { APPOINTMENTS_QUERY_LIMIT } from '../lib/appointmentsQuery';
 import { appendTimestampedFollowUpNote, latestNotePreview } from '../lib/followUpNotes';
 import {
@@ -31,6 +32,21 @@ import {
     type DentrixPatientAppointmentInfoDoc,
     type DentrixPatientDoc,
 } from '../lib/dentrix';
+
+function buildLatestAppointmentByPatientId(
+    appointments: DentrixAppointmentDoc[]
+): Record<string, DentrixAppointmentDoc> {
+    const sorted = [...appointments].sort((a, b) =>
+        (b.appointment_date ?? '').localeCompare(a.appointment_date ?? '')
+    );
+    const map: Record<string, DentrixAppointmentDoc> = {};
+    for (const row of sorted) {
+        const key = String(row.patient_id ?? '');
+        if (!key || map[key]) continue;
+        map[key] = row;
+    }
+    return map;
+}
 
 interface FollowUpTrackingDoc {
     id: string;
@@ -63,7 +79,8 @@ export interface FollowUpsPageProps {
 
 const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
     const { user, userProfile } = useAuth();
-    const [loading, setLoading] = useState(true);
+    const frontDeskData = useFrontDeskData();
+    const [loading, setLoading] = useState(!embedded);
     const [search, setSearch] = useState('');
     const [updatingId, setUpdatingId] = useState<string | null>(null);
     const [activeNoteId, setActiveNoteId] = useState<string | null>(null);
@@ -73,20 +90,37 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
     const [providerFilter, setProviderFilter] = useState<string>('all');
     const [minMissedFilter, setMinMissedFilter] = useState<number>(1);
     const [statusFilter, setStatusFilter] = useState<'open' | 'booked' | 'all'>('open');
-    const [patientsById, setPatientsById] = useState<Record<string, DentrixPatientDoc>>({});
-    const [patientInfoById, setPatientInfoById] = useState<Record<string, DentrixPatientAppointmentInfoDoc>>({});
-    const [latestAppointmentByPatientId, setLatestAppointmentByPatientId] = useState<Record<string, DentrixAppointmentDoc>>({});
+    const [localPatientsById, setLocalPatientsById] = useState<Record<string, DentrixPatientDoc>>({});
+    const [localPatientInfoById, setLocalPatientInfoById] = useState<Record<string, DentrixPatientAppointmentInfoDoc>>({});
+    const [localLatestAppointmentByPatientId, setLocalLatestAppointmentByPatientId] = useState<
+        Record<string, DentrixAppointmentDoc>
+    >({});
     const [trackingByPatientId, setTrackingByPatientId] = useState<Record<string, FollowUpTrackingDoc>>({});
     const [logModalItem, setLogModalItem] = useState<(DentrixFollowUpWorkItem & { trackingId: string; tracking?: FollowUpTrackingDoc }) | null>(null);
 
+    const patientsById = embedded ? frontDeskData.patientsById : localPatientsById;
+    const patientInfoById = embedded ? frontDeskData.patientInfoById : localPatientInfoById;
+    const latestAppointmentByPatientId = useMemo(
+        () =>
+            embedded
+                ? buildLatestAppointmentByPatientId(frontDeskData.allAppointments)
+                : localLatestAppointmentByPatientId,
+        [embedded, frontDeskData.allAppointments, localLatestAppointmentByPatientId]
+    );
+
     useEffect(() => {
+        if (embedded) {
+            setLoading(frontDeskData.appointmentsLoading);
+            return;
+        }
+
         const unsubPatients = onSnapshot(collection(db, 'patients'), (snap) => {
             const map: Record<string, DentrixPatientDoc> = {};
             snap.docs.forEach((d) => {
                 const row = { id: d.id, ...d.data() } as DentrixPatientDoc;
                 map[String(row.patient_id ?? row.id)] = row;
             });
-            setPatientsById(map);
+            setLocalPatientsById(map);
             setLoading(false);
         });
 
@@ -96,7 +130,7 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
                 const row = { id: d.id, ...d.data() } as DentrixPatientAppointmentInfoDoc;
                 map[String(row.patient_id ?? row.id)] = row;
             });
-            setPatientInfoById(map);
+            setLocalPatientInfoById(map);
             setLoading(false);
         });
 
@@ -110,7 +144,7 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
                     if (!key || map[key]) return;
                     map[key] = row;
                 });
-                setLatestAppointmentByPatientId(map);
+                setLocalLatestAppointmentByPatientId(map);
             }
         );
 
@@ -132,7 +166,7 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
             unsubAppointments();
             unsubTracking();
         };
-    }, []);
+    }, [embedded, frontDeskData.appointmentsLoading]);
 
     const items = useMemo(() => {
         const rows: (DentrixFollowUpWorkItem & { trackingId: string; tracking?: FollowUpTrackingDoc })[] = [];
@@ -179,12 +213,15 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
         });
 
         rows.sort((a, b) => {
-            if (b.missedAppointments !== a.missedAppointments) {
-                return b.missedAppointments - a.missedAppointments;
-            }
-            const aMissed = parseDentrixDate(a.lastMissedDate)?.getTime() ?? 0;
-            const bMissed = parseDentrixDate(b.lastMissedDate)?.getTime() ?? 0;
-            return bMissed - aMissed;
+            const aAppt =
+                parseDentrixDate(a.latestAppointmentDate)?.getTime() ??
+                parseDentrixDate(a.lastAppointmentDate)?.getTime() ??
+                0;
+            const bAppt =
+                parseDentrixDate(b.latestAppointmentDate)?.getTime() ??
+                parseDentrixDate(b.lastAppointmentDate)?.getTime() ??
+                0;
+            return bAppt - aAppt;
         });
 
         return rows;
@@ -450,7 +487,6 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
                                     <th className="p-6 text-[10px] font-black text-slate-300 uppercase tracking-[0.2em] min-w-[140px]">
                                         Why not rebooked
                                     </th>
-                                    <th className="p-6 text-[10px] font-black text-slate-300 uppercase tracking-[0.2em]">Missed</th>
                                     <th className="p-6 text-[10px] font-black text-slate-300 uppercase tracking-[0.2em]">Last Appointment</th>
                                     <th className="p-6 text-[10px] font-black text-slate-300 uppercase tracking-[0.2em]">Outreach</th>
                                     <th className="p-6 text-[10px] font-black text-slate-300 uppercase tracking-[0.2em]">Notes / Outcome</th>
@@ -515,12 +551,6 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
                                                     )}
                                                 </p>
                                             ) : null}
-                                        </td>
-                                        <td className="p-6">
-                                            <div className="text-xs font-black text-rose-600">{item.missedAppointments}</div>
-                                            <div className="text-[9px] text-slate-400 uppercase tracking-wider">
-                                                Last missed {item.lastMissedDate ?? 'N/A'}
-                                            </div>
                                         </td>
                                         <td className="p-6">
                                             <p className="text-[11px] font-black text-slate-800 uppercase tracking-tight leading-none">{item.latestReason}</p>

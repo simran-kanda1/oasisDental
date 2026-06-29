@@ -27,6 +27,52 @@ export function parseRecallIntervalMonths(label: string): number | null {
   return null;
 }
 
+/** Reason / appointment category only — excludes production type (e.g. "6mo Continuing care"). */
+export function hygieneRecallLabelText(a: DentrixAppointmentDoc): string {
+  const parts = [
+    cleanDentrixText(a.reason),
+    cleanDentrixText(a.appointment_type),
+    cleanDentrixText(a.appt_type),
+    cleanDentrixText(a.appointmentType),
+  ].filter(Boolean);
+  return parts.join(' ').toLowerCase();
+}
+
+export function parseHygieneRecallIntervalMonths(appt: DentrixAppointmentDoc): number | null {
+  return parseRecallIntervalMonths(hygieneRecallLabelText(appt));
+}
+
+/** Scaling-only hygiene rows (e.g. "* SCALING") are not the patient's continuing-care anchor visit. */
+export function isScalingPrimaryHygieneVisit(a: DentrixAppointmentDoc): boolean {
+  const reason = cleanDentrixText(a.reason).toLowerCase();
+  return /\*?\s*scaling\b/.test(reason);
+}
+
+/** Dentrix continuing-care production type on the appointment category fields. */
+export function isHygieneContinuingCareProductionType(a: DentrixAppointmentDoc): boolean {
+  const extra = a as DentrixAppointmentDoc & {
+    production_type_desc?: string;
+    production_type_abbr?: string;
+    production_type_code?: string;
+  };
+  const text = [
+    cleanDentrixText(extra.production_type_desc),
+    cleanDentrixText(extra.production_type_abbr),
+    cleanDentrixText(extra.production_type_code),
+  ]
+    .filter(Boolean)
+    .join(' ');
+  return /\bcontinuing care\b/i.test(text);
+}
+
+export function isRecallOverdueForHygiene(appt: DentrixAppointmentDoc, now: Date): boolean {
+  const interval = parseHygieneRecallIntervalMonths(appt);
+  if (interval === null) return true;
+  const dueDate = getRecallDueDate(appt, interval);
+  if (!dueDate) return false;
+  return !isBefore(startOfDay(now), dueDate);
+}
+
 /** Last visit + interval months (e.g. Apr 10 + 2M → Jun 10). */
 export function getRecallDueDate(
   appt: DentrixAppointmentDoc,
@@ -96,6 +142,11 @@ export function isHygieneProductionType(a: DentrixAppointmentDoc): boolean {
   return HYGIENE_PRODUCTION_TYPE_RE.test(text);
 }
 
+/** Appointment text that indicates a true new-patient / initial consult visit (not routine "exam"). */
+export function matchesNewPatientAppointmentText(label: string): boolean {
+  return /\b(new patient|np\b|new pt|initial exam|new pt exam|consultation)\b/i.test(label);
+}
+
 /** Dentrix / practice varies — broaden matchers and tune status_id if needed */
 export function isAppointmentNoShow(a: DentrixAppointmentDoc): boolean {
   const s = appointmentLabelText(a);
@@ -130,17 +181,17 @@ export function patientHasFutureAppointmentAfter(
   patientId: string,
   afterDate: Date,
   appointments: DentrixAppointmentDoc[],
-  today: Date
+  today: Date,
+  excludeApptId?: string
 ): boolean {
-  const t0 = startOfDay(today);
   const after = startOfDay(afterDate);
   return appointments.some((x) => {
     if (String(x.patient_id ?? '') !== patientId) return false;
+    if (excludeApptId && x.id === excludeApptId) return false;
+    if (!isActiveScheduledAppointment(x, today)) return false;
     const d = parseDentrixDate(x.appointment_date);
     if (!d) return false;
-    if (!isAfter(d, after)) return false;
-    if (!isAfter(d, t0)) return false;
-    return true;
+    return isAfter(startOfDay(d), after);
   });
 }
 

@@ -90,10 +90,6 @@ export const TASK_LINK_PRESETS: TaskLinkConfig[] = [
     ],
   },
   {
-    presetId: 'referrals',
-    targets: [{ section: 'frontDeskQueues', queueId: 'referral_doctor_followup', label: 'Referrals' }],
-  },
-  {
     presetId: 'fillings',
     targets: [{ section: 'frontDeskQueues', queueId: 'fillings', label: 'Fillings' }],
   },
@@ -132,7 +128,6 @@ export function inferTaskLinkPresetId(title: string): string {
   if (t.includes('emergency') || t.includes('emerg ')) return 'emerg_follow_up';
   if (t.includes('hyg unbooked') || t.includes('hygiene')) return 'hygiene_cc';
   if (t.includes('new patient review') || t.includes('np/emerg')) return 'new_patient_follow_up';
-  if (t.includes('referal') || t.includes('referral')) return 'referrals';
   if (t.includes('treatment planner')) return 'fillings';
 
   return TASK_LINK_PRESET_NONE;

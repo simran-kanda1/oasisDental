@@ -61,17 +61,40 @@ export function CardGridSkeleton({ count = 6 }: { count?: number }) {
   );
 }
 
+export function AppSpinner({ className }: { className?: string }) {
+  return (
+    <div
+      className={cn(
+        'h-9 w-9 rounded-full border-2 border-slate-200 border-t-teal-600 animate-spin',
+        className
+      )}
+      role="status"
+      aria-label="Loading"
+    />
+  );
+}
+
 export function AppLoadingSkeleton() {
   return (
-    <div className="min-h-screen bg-slate-50 flex items-center justify-center p-8">
-      <div className="w-full max-w-md space-y-6">
-        <div className="flex flex-col items-center gap-4">
-          <Skeleton className="w-16 h-16 rounded-lg" />
-          <Skeleton className="h-6 w-40" />
-          <Skeleton className="h-3 w-56" />
+    <div className="min-h-screen min-h-[100dvh] w-full bg-slate-50 flex items-center justify-center p-6">
+      <div className="flex flex-col items-center justify-center gap-5 text-center">
+        <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-teal-600 text-white text-xl font-black shadow-sm">
+          O
         </div>
-        <StatGridSkeleton count={2} />
+        <div className="space-y-1">
+          <p className="text-sm font-bold text-slate-800 uppercase tracking-widest">Oasis Dental</p>
+          <p className="text-xs text-slate-500">Loading your workspace…</p>
+        </div>
+        <AppSpinner />
       </div>
+    </div>
+  );
+}
+
+export function PageLoadingFallback() {
+  return (
+    <div className="flex min-h-[min(60vh,32rem)] w-full items-center justify-center p-8">
+      <AppSpinner />
     </div>
   );
 }

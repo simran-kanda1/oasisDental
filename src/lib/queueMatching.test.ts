@@ -48,7 +48,13 @@ describe('matchesEstimateAgeBucket', () => {
 describe('queue procedure codes', () => {
   it('matches resto range for fillings queue config', () => {
     expect(anyCodeMatchesQueue(['23311'], 'fillings')).toBe(true);
-    expect(anyCodeMatchesQueue(['01101'], 'new_patient_follow_up')).toBe(true);
+    expect(anyCodeMatchesQueue(['27201'], 'fillings')).toBe(false);
+  });
+
+  it('matches new patient comprehensive codes but not routine periodic exams', () => {
+    expect(anyCodeMatchesQueue(['01401'], 'new_patient_follow_up')).toBe(true);
+    expect(anyCodeMatchesQueue(['01501'], 'new_patient_follow_up')).toBe(true);
+    expect(anyCodeMatchesQueue(['01101'], 'new_patient_follow_up')).toBe(false);
     expect(anyCodeMatchesQueue(['27201'], 'fillings')).toBe(false);
   });
 
@@ -82,6 +88,12 @@ describe('isHygieneRecallLabel', () => {
     expect(isHygieneRecallLabel('4m')).toBe(true);
     expect(isHygieneRecallLabel('3M recall')).toBe(true);
     expect(isHygieneRecallLabel('crown prep 4m')).toBe(false);
+  });
+
+  it('treats 6M continuing care and continuing care labels as hygiene', () => {
+    expect(isHygieneRecallLabel('6mo continuing care')).toBe(true);
+    expect(isHygieneRecallLabel('6m recall')).toBe(true);
+    expect(isHygieneRecallLabel('continuing care')).toBe(true);
   });
 });
 
@@ -387,6 +399,81 @@ describe('recall interval queue filtering', () => {
     expect(onDue[0].isOverdue).toBe(true);
   });
 
+  it('uses reason recall interval instead of continuing-care production type label', () => {
+    const appts: DentrixAppointmentDoc[] = [
+      {
+        id: 'a1',
+        patient_id: 1,
+        patient_name: 'Test Patient',
+        appointment_date: '2026-01-01T10:00:00Z',
+        reason: '4M prophy',
+        appointment_type: 'HYG1',
+        production_type_desc: '6mo Continuing care',
+      } as DentrixAppointmentDoc,
+    ];
+    const rows = buildQueueRows('hygiene_cc', appts, patientsById, 0, now, 'all', 'all', {
+      procedureCodes: hygieneProcedureCodes,
+      ledgerByPatientId: ledgerForVisit(1, 111, '2026-01-01T10:00:00Z'),
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].recallIntervalMonths).toBe(4);
+  });
+
+  it('hides patient when scaling visit exists but future 6mo continuing care is booked', () => {
+    const appts: DentrixAppointmentDoc[] = [
+      {
+        id: 'scaling',
+        patient_id: 1,
+        patient_name: 'Test Patient',
+        appointment_date: '2026-05-01T10:00:00Z',
+        appointment_type: 'HYG2',
+        reason: '* SCALING',
+        production_type_desc: '6mo Continuing care',
+      } as DentrixAppointmentDoc,
+      {
+        id: 'future-cc',
+        patient_id: 1,
+        patient_name: 'Test Patient',
+        appointment_date: '2026-11-01T10:00:00Z',
+        production_type_desc: '6mo Continuing care',
+      } as DentrixAppointmentDoc,
+    ];
+    const rows = buildQueueRows('hygiene_cc', appts, patientsById, 0, now, 'all', 'all', {
+      procedureCodes: hygieneProcedureCodes,
+      ledgerByPatientId: ledgerForVisit(1, 111, '2026-01-01T10:00:00Z'),
+    });
+    expect(rows).toHaveLength(0);
+  });
+
+  it('anchors hygiene CC on prior prophy when latest visit is scaling only', () => {
+    const appts: DentrixAppointmentDoc[] = [
+      {
+        id: 'prophy',
+        patient_id: 1,
+        patient_name: 'Test Patient',
+        appointment_date: '2026-01-01T10:00:00Z',
+        appointment_type: 'HYG1',
+        reason: '4M prophy',
+      },
+      {
+        id: 'scaling',
+        patient_id: 1,
+        patient_name: 'Test Patient',
+        appointment_date: '2026-05-01T10:00:00Z',
+        appointment_type: 'HYG2',
+        reason: '* SCALING',
+        production_type_desc: '6mo Continuing care',
+      } as DentrixAppointmentDoc,
+    ];
+    const rows = buildQueueRows('hygiene_cc', appts, patientsById, 0, now, 'all', 'all', {
+      procedureCodes: hygieneProcedureCodes,
+      ledgerByPatientId: ledgerForVisit(1, 111, '2026-01-01T10:00:00Z'),
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].recallIntervalMonths).toBe(4);
+    expect(rows[0].detail).toBe('4M prophy');
+  });
+
   it('does not list GA from appointment text without completed ledger code', () => {
     const appts: DentrixAppointmentDoc[] = [
       {
@@ -429,6 +516,46 @@ describe('recall interval queue filtering', () => {
     const rows = buildQueueRows(GA_ALL_APPOINTMENTS_QUEUE_ID, appts, patientsById, 0, now, 'all', 'all', {
       procedureCodes,
       ledgerByPatientId,
+    });
+    expect(rows).toHaveLength(0);
+  });
+
+  it('lists upcoming GA appointments within four months when filter is upcoming_4mo', () => {
+    const procedureCodes = [{ id: '1', proccodeid: 922, adacode: '92222', descript: 'GA' }];
+    const appts: DentrixAppointmentDoc[] = [
+      {
+        id: 'ga-future',
+        patient_id: 1,
+        patient_name: 'Test Patient',
+        appointment_date: '2026-08-01T10:00:00Z',
+        reason: '92222 GA',
+      },
+    ];
+    const ctx = { procedureCodes, gaTimeFilter: 'upcoming_4mo' as const };
+    const upcoming = buildQueueRows(GA_ALL_APPOINTMENTS_QUEUE_ID, appts, patientsById, 0, now, 'all', 'all', ctx);
+    expect(upcoming).toHaveLength(1);
+
+    const pastOnly = buildQueueRows(GA_ALL_APPOINTMENTS_QUEUE_ID, appts, patientsById, 0, now, 'all', 'all', {
+      ...ctx,
+      gaTimeFilter: 'past',
+    });
+    expect(pastOnly).toHaveLength(0);
+  });
+
+  it('excludes GA appointments more than four months in the future', () => {
+    const procedureCodes = [{ id: '1', proccodeid: 922, adacode: '92222', descript: 'GA' }];
+    const appts: DentrixAppointmentDoc[] = [
+      {
+        id: 'ga-far',
+        patient_id: 1,
+        patient_name: 'Test Patient',
+        appointment_date: '2026-12-01T10:00:00Z',
+        reason: '92222 GA',
+      },
+    ];
+    const rows = buildQueueRows(GA_ALL_APPOINTMENTS_QUEUE_ID, appts, patientsById, 0, now, 'all', 'all', {
+      procedureCodes,
+      gaTimeFilter: 'upcoming_4mo',
     });
     expect(rows).toHaveLength(0);
   });
@@ -590,6 +717,70 @@ describe('recall interval queue filtering', () => {
       ],
     ]);
     const rows = buildQueueRows('root_canal', appts, patientsById, 0, now, 'all', 'all', {
+      procedureCodes,
+      ledgerByPatientId,
+    });
+    expect(rows).toHaveLength(0);
+  });
+
+  it('removes ortho once matching code is posted in ledger', () => {
+    const procedureCodes = [{ id: 'o1', proccodeid: 801, adacode: '80101', descript: 'Ortho' }];
+    const appts: DentrixAppointmentDoc[] = [
+      {
+        id: 'ortho1',
+        patient_id: 1,
+        patient_name: 'Test Patient',
+        appointment_date: '2026-01-15T10:00:00Z',
+        reason: 'Ortho adjustment',
+      },
+    ];
+    const ledgerByPatientId = new Map<number, import('./ledgerTransactions').DentrixLedgerTransactionDoc[]>([
+      [
+        1,
+        [
+          {
+            id: 'l1',
+            patid: 1,
+            proccodeid: 801,
+            procdate: '2026-01-15T10:00:00Z',
+            chartstatus: 102,
+          },
+        ],
+      ],
+    ]);
+    const rows = buildQueueRows('ortho_follow_ups', appts, patientsById, 0, now, 'all', 'all', {
+      procedureCodes,
+      ledgerByPatientId,
+    });
+    expect(rows).toHaveLength(0);
+  });
+
+  it('removes bone grafting once matching code is posted in ledger', () => {
+    const procedureCodes = [{ id: 'bg1', proccodeid: 426, adacode: '42611', descript: 'Bone graft' }];
+    const appts: DentrixAppointmentDoc[] = [
+      {
+        id: 'bg1',
+        patient_id: 1,
+        patient_name: 'Test Patient',
+        appointment_date: '2026-01-15T10:00:00Z',
+        reason: 'Bone graft',
+      },
+    ];
+    const ledgerByPatientId = new Map<number, import('./ledgerTransactions').DentrixLedgerTransactionDoc[]>([
+      [
+        1,
+        [
+          {
+            id: 'l1',
+            patid: 1,
+            proccodeid: 426,
+            procdate: '2026-01-15T10:00:00Z',
+            chartstatus: 102,
+          },
+        ],
+      ],
+    ]);
+    const rows = buildQueueRows('bone_grafting', appts, patientsById, 0, now, 'all', 'all', {
       procedureCodes,
       ledgerByPatientId,
     });
@@ -870,6 +1061,112 @@ describe('cbct and night guard queues', () => {
   });
 });
 
+describe('new_patient_follow_up queue', () => {
+  const now = new Date('2026-06-15T12:00:00Z');
+  const patientsById = {
+    '1': { id: '1', patient_id: 1, first_name: 'Pat', last_name: 'One', status: 1 },
+  };
+  const npProcedureCodes = [
+    { id: 'np1', proccodeid: 1401, adacode: '01401', descript: 'Comprehensive oral evaluation' },
+    { id: 'per1', proccodeid: 1101, adacode: '01101', descript: 'Periodic oral evaluation' },
+  ];
+
+  function ledgerForVisit(
+    patid: number,
+    proccodeid: number,
+    procdate: string
+  ): Map<number, import('./ledgerTransactions').DentrixLedgerTransactionDoc[]> {
+    return new Map([
+      [
+        patid,
+        [
+          {
+            id: `l-${patid}-${procdate}`,
+            patid,
+            proccodeid,
+            procdate,
+            chartstatus: 105,
+          },
+        ],
+      ],
+    ]);
+  }
+
+  it('lists true new patient with comprehensive code and no prior visits', () => {
+    const appts: DentrixAppointmentDoc[] = [
+      {
+        id: 'np1',
+        patient_id: 1,
+        patient_name: 'Pat One',
+        appointment_date: '2026-05-01T10:00:00',
+        reason: 'New patient comprehensive exam',
+      },
+    ];
+    const rows = buildQueueRows('new_patient_follow_up', appts, patientsById, 0, now, 'all', 'w4plus', {
+      procedureCodes: npProcedureCodes,
+      ledgerByPatientId: ledgerForVisit(1, 1401, '2026-05-01T10:00:00'),
+    });
+    expect(rows).toHaveLength(1);
+  });
+
+  it('excludes established patients with prior visit history', () => {
+    const appts: DentrixAppointmentDoc[] = [
+      {
+        id: 'old',
+        patient_id: 1,
+        patient_name: 'Pat One',
+        appointment_date: '2020-03-01T10:00:00',
+        reason: '4M prophy',
+      },
+      {
+        id: 'recent',
+        patient_id: 1,
+        patient_name: 'Pat One',
+        appointment_date: '2026-05-01T10:00:00',
+        reason: 'New patient comprehensive exam',
+      },
+    ];
+    const rows = buildQueueRows('new_patient_follow_up', appts, patientsById, 0, now, 'all', 'w4plus', {
+      procedureCodes: npProcedureCodes,
+      ledgerByPatientId: ledgerForVisit(1, 1401, '2026-05-01T10:00:00'),
+    });
+    expect(rows).toHaveLength(0);
+  });
+
+  it('does not list routine periodic exam visits for established patients', () => {
+    const appts: DentrixAppointmentDoc[] = [
+      {
+        id: 'recent',
+        patient_id: 1,
+        patient_name: 'Pat One',
+        appointment_date: '2026-05-01T10:00:00',
+        reason: 'Periodic exam',
+      },
+    ];
+    const rows = buildQueueRows('new_patient_follow_up', appts, patientsById, 0, now, 'all', 'w4plus', {
+      procedureCodes: npProcedureCodes,
+      ledgerByPatientId: ledgerForVisit(1, 1101, '2026-05-01T10:00:00'),
+    });
+    expect(rows).toHaveLength(0);
+  });
+
+  it('does not match generic exam text without new patient wording', () => {
+    const appts: DentrixAppointmentDoc[] = [
+      {
+        id: 'recent',
+        patient_id: 1,
+        patient_name: 'Pat One',
+        appointment_date: '2026-05-01T10:00:00',
+        reason: 'Exam and cleaning',
+      },
+    ];
+    const rows = buildQueueRows('new_patient_follow_up', appts, patientsById, 0, now, 'all', 'w4plus', {
+      procedureCodes: npProcedureCodes,
+    });
+    expect(rows).toHaveLength(0);
+  });
+});
+
 describe('emerg_follow_up queue', () => {
   const now = new Date('2026-06-15T12:00:00Z');
   const patientsById = {
@@ -911,6 +1208,164 @@ describe('emerg_follow_up queue', () => {
 
     const rows = buildQueueRows('emerg_follow_up', appts, patientsById, 0, now, 'all', 'all', {});
     expect(rows).toHaveLength(1);
+  });
+});
+
+describe('no shows past week queue', () => {
+  const now = new Date('2026-06-24T12:00:00Z');
+  const patientsById = {
+    '100': { id: 'p100', patient_id: 100, first_name: 'Joshi', last_name: 'Patient', status: 1 },
+    '101': { id: 'p101', patient_id: 101, first_name: 'Renuka', last_name: 'Patient', status: 1 },
+  };
+  const noShowProcedureCodes = [{ id: 'nc20', proccodeid: 9020, adacode: 'NC000020', descript: 'No show' }];
+
+  it('lists Joshi and Renuka from ledger no-show codes on June 20 without marking rebooked', () => {
+    const appts: DentrixAppointmentDoc[] = [
+      {
+        id: 'joshi-appt',
+        patient_id: 100,
+        patient_name: 'Joshi Patient',
+        appointment_date: '2026-06-20T14:00:00Z',
+        reason: 'Cleaning',
+        status_id: 1,
+      },
+      {
+        id: 'renuka-appt',
+        patient_id: 101,
+        patient_name: 'Renuka Patient',
+        appointment_date: '2026-06-20T10:00:00Z',
+        reason: 'Exam',
+        status_id: 1,
+      },
+    ];
+    const ledgerByPatientId = new Map<number, import('./ledgerTransactions').DentrixLedgerTransactionDoc[]>([
+      [
+        100,
+        [
+          {
+            id: 'l-joshi',
+            patid: 100,
+            proccodeid: 9020,
+            procdate: '2026-06-20T14:00:00Z',
+            chartstatus: 102,
+          },
+        ],
+      ],
+      [
+        101,
+        [
+          {
+            id: 'l-renuka',
+            patid: 101,
+            proccodeid: 9020,
+            procdate: '2026-06-20T10:00:00Z',
+            chartstatus: 102,
+          },
+        ],
+      ],
+    ]);
+
+    const rows = buildQueueRows('no_shows_past_week', appts, patientsById, 0, now, 'all', 'all', {
+      procedureCodes: noShowProcedureCodes,
+      ledgerByPatientId,
+    });
+
+    expect(rows).toHaveLength(2);
+    expect(rows.map((r) => r.patientName)).toEqual(expect.arrayContaining(['Joshi Patient', 'Renuka Patient']));
+    expect(rows.every((r) => r.rebooked === false)).toBe(true);
+  });
+
+  it('does not list appointments without ledger no-show codes', () => {
+    const appts: DentrixAppointmentDoc[] = [
+      {
+        id: 'false-positive',
+        patient_id: 100,
+        patient_name: 'Joshi Patient',
+        appointment_date: '2026-06-20T14:00:00Z',
+        reason: 'no show',
+        status_id: 3,
+      },
+    ];
+
+    const rows = buildQueueRows('no_shows_past_week', appts, patientsById, 0, now, 'all', 'all', {
+      procedureCodes: noShowProcedureCodes,
+      ledgerByPatientId: new Map(),
+    });
+
+    expect(rows).toHaveLength(0);
+  });
+
+  it('marks rebooked only when an active future appointment exists after the no-show', () => {
+    const appts: DentrixAppointmentDoc[] = [
+      {
+        id: 'past-no-show',
+        patient_id: 100,
+        patient_name: 'Joshi Patient',
+        appointment_date: '2026-06-20T14:00:00Z',
+        reason: 'Cleaning',
+        status_id: 1,
+      },
+      {
+        id: 'cancelled-future',
+        patient_id: 100,
+        patient_name: 'Joshi Patient',
+        appointment_date: '2026-06-28T10:00:00Z',
+        reason: 'cancelled',
+        status_id: 3,
+      },
+      {
+        id: 'active-future',
+        patient_id: 101,
+        patient_name: 'Renuka Patient',
+        appointment_date: '2026-06-20T10:00:00Z',
+        reason: 'Exam',
+        status_id: 1,
+      },
+      {
+        id: 'renuka-rebook',
+        patient_id: 101,
+        patient_name: 'Renuka Patient',
+        appointment_date: '2026-06-28T11:00:00Z',
+        reason: 'Follow-up',
+        status_id: 1,
+      },
+    ];
+    const ledgerByPatientId = new Map<number, import('./ledgerTransactions').DentrixLedgerTransactionDoc[]>([
+      [
+        100,
+        [
+          {
+            id: 'l-joshi',
+            patid: 100,
+            proccodeid: 9020,
+            procdate: '2026-06-20T14:00:00Z',
+            chartstatus: 102,
+          },
+        ],
+      ],
+      [
+        101,
+        [
+          {
+            id: 'l-renuka',
+            patid: 101,
+            proccodeid: 9020,
+            procdate: '2026-06-20T10:00:00Z',
+            chartstatus: 102,
+          },
+        ],
+      ],
+    ]);
+
+    const rows = buildQueueRows('no_shows_past_week', appts, patientsById, 0, now, 'all', 'all', {
+      procedureCodes: noShowProcedureCodes,
+      ledgerByPatientId,
+    });
+
+    const joshi = rows.find((r) => r.patientId === '100');
+    const renuka = rows.find((r) => r.patientId === '101');
+    expect(joshi?.rebooked).toBe(false);
+    expect(renuka?.rebooked).toBe(true);
   });
 });
 
