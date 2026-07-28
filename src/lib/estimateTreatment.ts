@@ -25,10 +25,13 @@ export const ESTIMATE_AGE_BUCKET_OPTIONS: { id: EstimateAgeBucket; label: string
   { id: '12+', label: '1+ year' },
 ];
 
-export const DEFAULT_ESTIMATE_AGE_BUCKET: EstimateAgeBucket = 'all';
+export const DEFAULT_ESTIMATE_AGE_BUCKET: EstimateAgeBucket = '0-1';
 
 /** Months of documents to load from Firestore before client-side aging filter. */
 export const ESTIMATE_DOCUMENT_FETCH_MONTHS = 15;
+
+/** Only use ledger rows from the last N months when filling estimate procedure detail. */
+export const ESTIMATE_LEDGER_LOOKBACK_MONTHS = 12;
 
 export type EstimateFollowUpAction =
   | 'left_voicemail'

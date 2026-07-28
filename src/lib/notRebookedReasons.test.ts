@@ -51,10 +51,18 @@ describe('getNotRebookedReasonOptionsForQueue', () => {
     expect(labels).toContain('Cost / financial');
   });
 
+  it('uses default reason options including appointment booked', () => {
+    const labels = getNotRebookedReasonOptionsForQueue('implants').map((o) => o.label);
+    expect(labels).toContain('Appointment booked');
+    expect(labels).toContain('Patient/parent declined');
+    expect(labels).toContain('Transferred care elsewhere');
+  });
+
   it('uses GA workflow status options', () => {
     const labels = getNotRebookedReasonOptionsForQueue('ga_all_appointments').map((o) => o.label);
     expect(labels).toContain('Estimate sent');
     expect(labels).toContain('GA IC sent/received');
+    expect(labels).toContain('Left msg for follow up');
     expect(labels).toContain('Patient undecided / treatment on hold');
     expect(labels).toContain('Treatment complete');
     expect(labels).not.toContain('Cost / financial');
@@ -120,5 +128,19 @@ describe('queueReasonRemovalPatch', () => {
       removedFromList: true,
       treatmentComplete: true,
     });
+  });
+
+  it('removes ortho when ortho complete is selected', () => {
+    expect(queueReasonRemovesFromList('ortho_follow_ups', 'ortho_complete')).toBe(true);
+    expect(queueReasonRemovalPatch('ortho_follow_ups', 'ortho_complete')).toMatchObject({
+      removedFromList: true,
+    });
+  });
+
+  it('removes default-queue rows for appointment booked, declined, or transferred', () => {
+    expect(queueReasonRemovesFromList('implants', 'appointment_booked')).toBe(true);
+    expect(queueReasonRemovesFromList('hygiene_cc', 'declined')).toBe(true);
+    expect(queueReasonRemovesFromList('fillings', 'transferred')).toBe(true);
+    expect(queueReasonRemovesFromList('no_appt_booked', 'appointment_booked')).toBe(true);
   });
 });

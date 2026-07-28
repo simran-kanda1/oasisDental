@@ -25,12 +25,17 @@ export interface QueueProcedureConfig {
 
 export const QUEUE_PROCEDURE_CONFIGS: QueueProcedureConfig[] = [
   { queueId: 'hygiene_cc', codeRules: [{ type: 'range', begin: '11101', end: '13599' }] },
-  { queueId: 'ortho_follow_ups', codeRules: [{ type: 'range', begin: '80000', end: '89999' }] },
   { queueId: 'cbct', codeRules: [{ type: 'range', begin: '07000', end: '07043' }] },
   { queueId: 'fillings', codeRules: [{ type: 'range', begin: '23111', end: '23515' }] },
   { queueId: 'root_canal', codeRules: [{ type: 'range', begin: '30000', end: '39999' }] },
   { queueId: 'perio', codeRules: [{ type: 'range', begin: '40000', end: '49999' }] },
-  { queueId: 'implants', codeRules: [{ type: 'range', begin: '79000', end: 'AOX-SXG' }] },
+  {
+    queueId: 'implants',
+    codeRules: [
+      { type: 'range', begin: '79000', end: '79999' },
+      { type: 'codes', codes: ['AOX-SXG'] },
+    ],
+  },
   {
     queueId: 'bone_grafting',
     codeRules: [

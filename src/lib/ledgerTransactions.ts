@@ -74,6 +74,22 @@ async function fetchLedgerBatch(patids: number[]): Promise<void> {
   }
 }
 
+export function filterLedgerRowsWithinMonths(
+  rows: DentrixLedgerTransactionDoc[],
+  months: number,
+  now = new Date()
+): DentrixLedgerTransactionDoc[] {
+  if (!Number.isFinite(months) || months <= 0) return rows;
+  const since = new Date(now);
+  since.setMonth(since.getMonth() - months);
+  since.setHours(0, 0, 0, 0);
+  return rows.filter((row) => {
+    const d = parseDentrixDate(row.procdate ?? row.entrydate);
+    if (!d) return true;
+    return d >= since;
+  });
+}
+
 export async function fetchLedgerForPatients(patientIds: string[]): Promise<Map<number, DentrixLedgerTransactionDoc[]>> {
   const unique = [...new Set(patientIds.map((id) => Number(id)).filter((n) => Number.isFinite(n) && n > 0))];
   const out = new Map<number, DentrixLedgerTransactionDoc[]>();

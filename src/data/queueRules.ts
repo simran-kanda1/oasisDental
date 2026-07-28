@@ -48,6 +48,21 @@ export const GA_TIME_FILTER_OPTIONS: { id: GaAppointmentTimeFilter; label: strin
 
 export const GA_APPOINTMENTS_LOOKAHEAD_MONTHS = 4;
 
+/** No-show ledger lookback window. */
+export type NoShowLookbackFilter = '1w' | '2w' | '4w';
+
+export const NO_SHOW_LOOKBACK_OPTIONS: { id: NoShowLookbackFilter; label: string; days: number }[] = [
+  { id: '1w', label: '1 week', days: 7 },
+  { id: '2w', label: '2 weeks', days: 14 },
+  { id: '4w', label: '4 weeks', days: 28 },
+];
+
+export const DEFAULT_NO_SHOW_LOOKBACK: NoShowLookbackFilter = '1w';
+
+export function noShowLookbackDays(filter: NoShowLookbackFilter = DEFAULT_NO_SHOW_LOOKBACK): number {
+  return NO_SHOW_LOOKBACK_OPTIONS.find((o) => o.id === filter)?.days ?? 7;
+}
+
 export const GA_ALL_APPOINTMENTS_QUEUE_ID = 'ga_all_appointments' as const;
 
 export interface QueueBuildContext {
@@ -56,6 +71,7 @@ export interface QueueBuildContext {
   trackingByApptId?: Record<string, QueueRowTrackingDoc>;
   patientInfoById?: Record<string, DentrixPatientAppointmentInfoDoc>;
   gaTimeFilter?: GaAppointmentTimeFilter;
+  noShowLookback?: NoShowLookbackFilter;
 }
 
 /** Built once per queue pass — avoids O(n²) scans and repeated code-map builds. */
@@ -147,7 +163,7 @@ export type StandaloneFrontDeskQueueId = (typeof STANDALONE_FRONT_DESK_QUEUE_IDS
 
 export const STANDALONE_FRONT_DESK_QUEUE_DEFS: FrontDeskQueueDef[] = [
   { id: 'emerg_follow_up', label: 'Emerg patient follow up', description: 'Had emergency visit; removed when any future appointment is booked.' },
-  { id: 'new_patient_follow_up', label: 'New patient follow up', description: 'True new-patient or initial consult visit in the last 12 months with no prior visit history and no future NP visit booked.' },
+  { id: 'new_patient_follow_up', label: 'New patient follow up', description: 'True new-patient or initial consult visit in the last 12 months with no prior visit history and no future appointment booked.' },
   {
     id: GA_ALL_APPOINTMENTS_QUEUE_ID,
     label: 'GA appointments',
@@ -168,16 +184,16 @@ export function getFrontDeskQueueDef(queueId: string): FrontDeskQueueDef | undef
 export const FRONT_DESK_QUEUE_DEFS: FrontDeskQueueDef[] = [
   {
     id: 'no_shows_past_week',
-    label: 'No shows (past week)',
-    description: 'Ledger no-show codes (NC000020–NC000022) in the last 7 days; rebooked when an active future appointment exists.',
+    label: 'No shows',
+    description: 'Ledger no-show codes (NC000020–NC000022); filter by 1, 2, or 4 weeks. Rebooked when an active future appointment exists.',
   },
-  { id: 'hygiene_cc', label: 'Hygiene CC', description: 'Had a hygiene-type visit; overdue per recall interval (e.g. 4M) with no future hygiene appointment booked.' },
-  { id: 'ortho_follow_ups', label: 'Ortho follow ups', description: 'Had ortho visit; no future ortho appointment booked.' },
+  { id: 'hygiene_cc', label: 'Hygiene CC', description: 'Had a hygiene-type visit; overdue per recall interval (e.g. 4M) with no future cleaning/hygiene appointment booked.' },
+  { id: 'ortho_follow_ups', label: 'Ortho follow ups', description: 'Had ortho visit (appointment text); no future ortho appointment booked. Recurring — not removed by ledger codes.' },
   { id: 'cbct', label: 'CBCT', description: 'Had CBCT imaging; no future CBCT-type appointment booked. Removed when CBCT is posted in the ledger.' },
   { id: 'fillings', label: 'Restorative', description: 'Had restorative visit; no future restorative appointment booked. Removed when restorative treatment is posted in the ledger.' },
   { id: 'root_canal', label: 'Root canal', description: 'Had root canal treatment; no future endo appointment booked. Removed when endo treatment is posted in the ledger.' },
   { id: 'perio', label: 'Perio / GG / BB / M', description: 'Had perio-related visit; no future matching appointment booked.' },
-  { id: 'implants', label: 'Implants', description: 'Had implant-related visit; no future implant visit booked.' },
+  { id: 'implants', label: 'Implants', description: 'Had implant-related visit; no future implant visit booked. Excludes in-tx ortho appointments.' },
   { id: 'bone_grafting', label: 'Bone grafting', description: 'Had bone graft visit; no future matching appointment booked.' },
   { id: 'gum_grafting', label: 'Gum grafting', description: 'Had gum graft visit; no future matching appointment booked.' },
   { id: 'extraction', label: 'Extraction', description: 'Had extraction-related visit; no future extraction visit booked. Removed when extraction is posted in the ledger.' },
@@ -399,7 +415,7 @@ function appointmentQualifiesAsHygieneCcAnchor(
   return true;
 }
 
-/** Future hygiene booked: production type, continuing care type, recall text, or hygiene codes on the visit. */
+/** Future hygiene booked: any cleaning / scaling / hygiene visit clears the CC list. */
 function appointmentMatchesHygieneFuture(
   appt: DentrixAppointmentDoc,
   ctx: QueueBuildContext,
@@ -407,8 +423,18 @@ function appointmentMatchesHygieneFuture(
 ): boolean {
   if (isHygieneProductionType(appt)) return true;
   if (isHygieneContinuingCareProductionType(appt)) return true;
-  if (isHygieneRecallLabel(appointmentLabelText(appt))) return true;
+  const label = appointmentLabelText(appt);
+  if (isHygieneRecallLabel(label)) return true;
+  // Scaling patients recall every other month — any cleaning-style booking clears the list.
+  if (/\b(prophy|cleaning|scaling|hyg|hygiene|polish|perio maint|periodontal maint|re.?care|continuing care|check with (dr|doctor)|periodic)\b/i.test(label)) {
+    return true;
+  }
   return appointmentMatchesQueueByProcedureCodes(appt, 'hygiene_cc', ctx, indexes);
+}
+
+function isImplantInTxOrthoAppointment(appt: DentrixAppointmentDoc): boolean {
+  const label = appointmentLabelText(appt);
+  return /\bin\s*tx\b/i.test(label) && /\bortho\b/i.test(label);
 }
 
 function appointmentMatchesNewPatient(
@@ -498,6 +524,15 @@ function appointmentMatchesQueue(
 
   if (queueId === GA_ALL_APPOINTMENTS_QUEUE_ID) {
     return appointmentMatchesGa(appt, ctx, indexes);
+  }
+
+  // Ortho is recurring — match appointment text only (no ledger codes).
+  if (queueId === 'ortho_follow_ups') {
+    return KEYWORD_MATCHERS.ortho_follow_ups?.(label) ?? false;
+  }
+
+  if (queueId === 'implants' && isImplantInTxOrthoAppointment(appt)) {
+    return false;
   }
 
   const config = getQueueProcedureConfig(queueId);
@@ -593,7 +628,6 @@ const LEDGER_POSTED_REMOVE_QUEUE_IDS = new Set<string>([
   'extraction',
   'fillings',
   'root_canal',
-  'ortho_follow_ups',
   'bone_grafting',
 ]);
 
@@ -625,6 +659,17 @@ function isTreatmentPostedInLedger(
   return codes.some((c) => anyCodeMatchesQueue([c], queueId));
 }
 
+function gaAppointmentDetailLabel(a: DentrixAppointmentDoc): string {
+  return (
+    cleanDentrixText(a.reason) ||
+    cleanDentrixText(a.appointment_type) ||
+    cleanDentrixText(a.appt_type) ||
+    cleanDentrixText(a.appointmentType) ||
+    'Appointment'
+  );
+}
+
+/** One row per patient — combine same-day / multi-slot GA visits into a single detail line. */
 function buildGaAllAppointmentsQueue(
   ctx: QueueBuildContext,
   appointments: DentrixAppointmentDoc[],
@@ -632,12 +677,12 @@ function buildGaAllAppointmentsQueue(
   indexes: QueueBuildIndexes,
   now: Date,
   ageBucket: AgeBucketFilter,
-  gaTimeFilter: GaAppointmentTimeFilter = 'past'
+  gaTimeFilter: GaAppointmentTimeFilter = 'all'
 ): QueueRow[] {
   const queueId = GA_ALL_APPOINTMENTS_QUEUE_ID;
   const day = startOfDay(now);
   const lookaheadEnd = addMonths(day, GA_APPOINTMENTS_LOOKAHEAD_MONTHS);
-  const rows: QueueRow[] = [];
+  const matchingByPatient = new Map<string, DentrixAppointmentDoc[]>();
 
   for (const a of appointments) {
     if (!appointmentMatchesQueue(a, queueId, ctx, indexes)) continue;
@@ -659,8 +704,36 @@ function buildGaAllAppointmentsQueue(
       if (!matchesAgeBucket(m, ageBucket)) continue;
     }
 
-    const row = apptRow(a, patientsById, now);
-    if (row) rows.push(row);
+    const pid = String(a.patient_id ?? '');
+    if (!pid) continue;
+    const list = matchingByPatient.get(pid);
+    if (list) list.push(a);
+    else matchingByPatient.set(pid, [a]);
+  }
+
+  const rows: QueueRow[] = [];
+  for (const [, patientAppts] of matchingByPatient) {
+    patientAppts.sort(
+      (a, b) =>
+        (parseDentrixDate(b.appointment_date)?.getTime() ?? 0) -
+        (parseDentrixDate(a.appointment_date)?.getTime() ?? 0)
+    );
+    const primary = patientAppts[0];
+    const row = apptRow(primary, patientsById, now);
+    if (!row) continue;
+
+    const detailParts: string[] = [];
+    const seenDetails = new Set<string>();
+    for (const a of patientAppts) {
+      const dateKey = formatDentrixDateKey(a.appointment_date) || '—';
+      const label = gaAppointmentDetailLabel(a);
+      const part = patientAppts.length > 1 ? `${dateKey} · ${label}` : label;
+      if (seenDetails.has(part)) continue;
+      seenDetails.add(part);
+      detailParts.push(part);
+    }
+    row.detail = detailParts.join('; ');
+    rows.push(row);
   }
 
   return rows
@@ -819,7 +892,7 @@ function buildCategoryQueueWeekBucket(
       if (isTrackingExcluded(a.id, queueId, ctx)) return false;
       if (isTreatmentPostedInLedger(a, queueId, ctx, indexes)) return false;
       const pid = String(a.patient_id ?? '');
-      if (queueId === 'emerg_follow_up') {
+      if (queueId === 'emerg_follow_up' || queueId === 'new_patient_follow_up') {
         if (patientHasAnyFutureAppointmentBooked(pid, ctx, indexes, patientsById, now)) return false;
       } else if (hasFutureMatchingAppointment(pid, queueId, ctx, indexes, patientsById, now)) {
         return false;
@@ -849,7 +922,7 @@ export function buildQueueRows(
   sharedIndexes?: QueueBuildIndexes
 ): QueueRow[] {
   const today = startOfDay(now);
-  const weekAgo = subDays(today, 7);
+  const noShowSince = subDays(today, noShowLookbackDays(ctx.noShowLookback));
   const indexes = sharedIndexes ?? buildQueueIndexes(appointments, ctx, patientsById);
 
   const apptsForActivePatients = appointments.filter((a) => {
@@ -871,7 +944,7 @@ export function buildQueueRows(
   }
 
   if (queueId === 'no_shows_past_week') {
-    return buildNoShowEventsFromLedger(ctx, indexes, patientsById, weekAgo, today)
+    return buildNoShowEventsFromLedger(ctx, indexes, patientsById, noShowSince, today)
       .map((event) => {
         const excludeApptId = event.matchedAppt?.id;
         const rebooked = patientRebookedAfterNoShow(
@@ -964,7 +1037,7 @@ export function buildQueueRowCount(
   sharedIndexes?: QueueBuildIndexes
 ): number {
   const today = startOfDay(now);
-  const weekAgo = subDays(today, 7);
+  const noShowSince = subDays(today, noShowLookbackDays(ctx.noShowLookback));
   const indexes = sharedIndexes ?? buildQueueIndexes(appointments, ctx, patientsById);
 
   const apptsForActivePatients = appointments.filter((a) => {
@@ -973,34 +1046,19 @@ export function buildQueueRowCount(
   });
 
   if (queueId === GA_ALL_APPOINTMENTS_QUEUE_ID) {
-    const gaTimeFilter = ctx.gaTimeFilter ?? 'all';
-    const day = startOfDay(now);
-    const lookaheadEnd = addMonths(day, GA_APPOINTMENTS_LOOKAHEAD_MONTHS);
-    let count = 0;
-    for (const a of apptsForActivePatients) {
-      if (!appointmentMatchesQueue(a, queueId, ctx, indexes)) continue;
-      const d = parseDentrixDate(a.appointment_date);
-      if (!d) continue;
-      const apptDay = startOfDay(d);
-      const isPast = isBefore(apptDay, day);
-      const isUpcoming = !isBefore(apptDay, day) && !isAfter(apptDay, lookaheadEnd);
-      if (gaTimeFilter === 'past' && !isPast) continue;
-      if (gaTimeFilter === 'upcoming_4mo' && !isUpcoming) continue;
-      if (gaTimeFilter === 'all' && !isPast && !isUpcoming) continue;
-      if (isTrackingExcluded(a.id, queueId, ctx)) continue;
-      if (isPast && isTreatmentPostedInLedger(a, queueId, ctx, indexes)) continue;
-      if (isPast) {
-        const m = monthsSinceAppt(a, now);
-        if (!matchesAgeBucket(m, ageBucket)) continue;
-      }
-      count++;
-      if (count >= QUEUE_ROW_DISPLAY_LIMIT) return QUEUE_ROW_DISPLAY_LIMIT;
-    }
-    return count;
+    return buildGaAllAppointmentsQueue(
+      ctx,
+      apptsForActivePatients,
+      patientsById,
+      indexes,
+      now,
+      ageBucket,
+      ctx.gaTimeFilter ?? 'all'
+    ).length;
   }
 
   if (queueId === 'no_shows_past_week') {
-    return buildNoShowEventsFromLedger(ctx, indexes, patientsById, weekAgo, today).length;
+    return buildNoShowEventsFromLedger(ctx, indexes, patientsById, noShowSince, today).length;
   }
 
   if (queueId === 'hygiene_cc') {
@@ -1039,7 +1097,7 @@ export function buildQueueRowCount(
       if (isTrackingExcluded(a.id, queueId, ctx)) continue;
       if (isTreatmentPostedInLedger(a, queueId, ctx, indexes)) continue;
       const pid = String(a.patient_id ?? '');
-      if (queueId === 'emerg_follow_up') {
+      if (queueId === 'emerg_follow_up' || queueId === 'new_patient_follow_up') {
         if (patientHasAnyFutureAppointmentBooked(pid, ctx, indexes, patientsById, now)) continue;
       } else if (hasFutureMatchingAppointment(pid, queueId, ctx, indexes, patientsById, now)) {
         continue;

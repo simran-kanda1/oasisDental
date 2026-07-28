@@ -69,7 +69,7 @@ export const ESTIMATE_CODE_TYPE_GROUPS: EstimateCodeTypeGroup[] = [
   { id: 'root_canal', label: 'Root canal tx', begin: '30000', end: '39999' },
   { id: 'perio', label: 'Perio / GG / BB / M', begin: '40000', end: '49999' },
   { id: 'extraction', label: 'Extraction', begin: '71101', end: '72331' },
-  { id: 'implant', label: 'Implant', begin: '79000', end: 'AOX-SXG' },
+  { id: 'implant', label: 'Implant', begin: '79000', end: '79999' },
   { id: 'ortho', label: 'Ortho', begin: '80000', end: '89999' },
   { id: 'mri_req', label: 'MRI req given', begin: 'M0000020', end: 'M0000026' },
 ];

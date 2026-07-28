@@ -11,6 +11,8 @@ import {
   GA_TIME_FILTER_OPTIONS,
   NO_APPT_BOOKED_QUEUE_DEF,
   NO_APPT_BOOKED_QUEUE_ID,
+  NO_SHOW_LOOKBACK_OPTIONS,
+  DEFAULT_NO_SHOW_LOOKBACK,
   buildQueueIndexes,
   buildQueueRowCount,
   buildQueueRows,
@@ -19,6 +21,7 @@ import {
   queueRequiresLedgerForDisplay,
   type AgeBucketFilter,
   type GaAppointmentTimeFilter,
+  type NoShowLookbackFilter,
   type QueueBuildContext,
   type QueueRow,
   type VisitWeekBucketFilter,
@@ -123,20 +126,41 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
   const [ageBucket, setAgeBucket] = useState<AgeBucketFilter>(DEFAULT_AGE_BUCKET);
   const [visitWeekBucket, setVisitWeekBucket] = useState<VisitWeekBucketFilter>(DEFAULT_WEEK_BUCKET);
   const [gaTimeFilter, setGaTimeFilter] = useState<GaAppointmentTimeFilter>('all');
+  const [noShowLookback, setNoShowLookback] = useState<NoShowLookbackFilter>(DEFAULT_NO_SHOW_LOOKBACK);
   const [noteDraftByApptId, setNoteDraftByApptId] = useState<Record<string, string>>({});
   const [savingApptId, setSavingApptId] = useState<string | null>(null);
   const [saveNoticeApptId, setSaveNoticeApptId] = useState<string | null>(null);
   const [sectionSearch, setSectionSearch] = useState('');
+  const [localTrackingOverride, setLocalTrackingOverride] = useState<Record<string, Partial<QueueRowTrackingDoc>>>({});
+
+  const mergedTrackingByApptId = useMemo(
+    () => ({ ...trackingByApptId, ...Object.fromEntries(
+      Object.entries(localTrackingOverride).map(([id, patch]) => [
+        id,
+        { ...(trackingByApptId[id] ?? { appointmentId: id }), ...patch },
+      ])
+    ) }),
+    [trackingByApptId, localTrackingOverride]
+  );
 
   const queueBuildCtx = useMemo<QueueBuildContext>(
     () => ({
       procedureCodes,
       ledgerByPatientId,
-      trackingByApptId,
+      trackingByApptId: mergedTrackingByApptId,
       patientInfoById,
       gaTimeFilter: activeId === GA_ALL_APPOINTMENTS_QUEUE_ID ? gaTimeFilter : undefined,
+      noShowLookback: activeId === 'no_shows_past_week' ? noShowLookback : undefined,
     }),
-    [procedureCodes, ledgerByPatientId, trackingByApptId, patientInfoById, activeId, gaTimeFilter]
+    [
+      procedureCodes,
+      ledgerByPatientId,
+      mergedTrackingByApptId,
+      patientInfoById,
+      activeId,
+      gaTimeFilter,
+      noShowLookback,
+    ]
   );
 
   const sharedIndexes = useMemo(
@@ -172,6 +196,7 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
   const useBadgeHubCounts =
     ageBucket === DEFAULT_AGE_BUCKET &&
     visitWeekBucket === DEFAULT_WEEK_BUCKET &&
+    noShowLookback === DEFAULT_NO_SHOW_LOOKBACK &&
     !appointmentsLoading;
 
   const localQueueCounts = useMemo(() => {
@@ -219,10 +244,12 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
   const isNoApptBookedQueue = activeId === NO_APPT_BOOKED_QUEUE_ID;
   const isStandaloneQueue = isStandaloneFrontDeskQueue(activeId);
   const isGaQueue = activeId === GA_ALL_APPOINTMENTS_QUEUE_ID;
+  const isNoShowQueue = activeId === 'no_shows_past_week';
   const showGaTimeFilter = isGaQueue;
+  const showNoShowLookback = isNoShowQueue;
   const showAgeFilter =
     !isNoApptBookedQueue &&
-    activeId !== 'no_shows_past_week' &&
+    !isNoShowQueue &&
     !USE_WEEK_FILTER.has(activeId) &&
     (!isGaQueue || gaTimeFilter !== 'upcoming_4mo');
   const showWeekFilter = USE_WEEK_FILTER.has(activeId);
@@ -237,6 +264,10 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
   const persistTracking = useCallback(
     async (appointmentFirestoreId: string, patientId: string, patch: Partial<QueueRowTrackingDoc>) => {
       setSavingApptId(appointmentFirestoreId);
+      setLocalTrackingOverride((prev) => ({
+        ...prev,
+        [appointmentFirestoreId]: { ...(prev[appointmentFirestoreId] ?? {}), ...patch },
+      }));
       try {
         const id = queueTrackingDocId(appointmentFirestoreId);
         await setDoc(
@@ -348,6 +379,26 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
                   className={cn(
                     'px-2.5 py-1 rounded-md text-[9px] font-bold uppercase border',
                     gaTimeFilter === o.id
+                      ? 'bg-slate-900 text-white border-slate-900'
+                      : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400'
+                  )}
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
+          )}
+          {showNoShowLookback && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Lookback</span>
+              {NO_SHOW_LOOKBACK_OPTIONS.map((o) => (
+                <button
+                  key={o.id}
+                  type="button"
+                  onClick={() => setNoShowLookback(o.id)}
+                  className={cn(
+                    'px-2.5 py-1 rounded-md text-[9px] font-bold uppercase border',
+                    noShowLookback === o.id
                       ? 'bg-slate-900 text-white border-slate-900'
                       : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400'
                   )}
@@ -490,7 +541,7 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
               </thead>
               <tbody className="divide-y divide-slate-100">
                   {displayedQueueRows.map((row) => {
-                    const tr = trackingByApptId[row.appointmentFirestoreId];
+                    const tr = mergedTrackingByApptId[row.appointmentFirestoreId];
                     const draftKey = row.appointmentFirestoreId;
                     const noteVal =
                       noteDraftByApptId[draftKey] !== undefined ? noteDraftByApptId[draftKey] : (tr?.notes ?? '');

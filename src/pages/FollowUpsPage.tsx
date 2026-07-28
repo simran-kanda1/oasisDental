@@ -109,9 +109,23 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
     );
 
     useEffect(() => {
+        // Always load recall tracking — embedded mode previously skipped this, so
+        // remove / why-not-rebooked never appeared to save.
+        const unsubTracking = onSnapshot(collection(db, 'followUps'), (snap) => {
+            const map: Record<string, FollowUpTrackingDoc> = {};
+            snap.docs.forEach((d) => {
+                const row = { id: d.id, ...d.data() } as FollowUpTrackingDoc;
+                if (row.source !== 'dentrix') return;
+                if (typeof row.patient_id !== 'number') return;
+                if (!isRecallFollowUpDoc(row as unknown as Record<string, unknown>)) return;
+                map[String(row.patient_id)] = row;
+            });
+            setTrackingByPatientId(map);
+        });
+
         if (embedded) {
             setLoading(frontDeskData.appointmentsLoading);
-            return;
+            return () => unsubTracking();
         }
 
         const unsubPatients = onSnapshot(collection(db, 'patients'), (snap) => {
@@ -147,18 +161,6 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
                 setLocalLatestAppointmentByPatientId(map);
             }
         );
-
-        const unsubTracking = onSnapshot(collection(db, 'followUps'), (snap) => {
-            const map: Record<string, FollowUpTrackingDoc> = {};
-            snap.docs.forEach((d) => {
-                const row = { id: d.id, ...d.data() } as FollowUpTrackingDoc;
-                if (row.source !== 'dentrix') return;
-                if (typeof row.patient_id !== 'number') return;
-                if (!isRecallFollowUpDoc(row as unknown as Record<string, unknown>)) return;
-                map[String(row.patient_id)] = row;
-            });
-            setTrackingByPatientId(map);
-        });
 
         return () => {
             unsubPatients();
@@ -263,6 +265,14 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
             contactedBy: userProfile?.displayName ?? user?.email ?? 'User',
             ...patch,
         };
+        setTrackingByPatientId((prev) => ({
+            ...prev,
+            [item.patientId]: {
+                ...(prev[item.patientId] ?? item.tracking ?? { id: item.trackingId }),
+                id: item.trackingId,
+                ...payload,
+            } as FollowUpTrackingDoc,
+        }));
         await setDoc(doc(db, 'followUps', item.trackingId), payload, { merge: true });
     };
 

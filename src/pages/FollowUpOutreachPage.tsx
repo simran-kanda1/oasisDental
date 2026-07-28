@@ -6,7 +6,7 @@ import { Input } from '../components/ui/input';
 import { Select } from '../components/ui/select';
 import { useAuth } from '../contexts/AuthContext';
 import { fetchCoverageForPlans } from '../lib/estimateProcedureCoverage';
-import { fetchLedgerForPatients } from '../lib/ledgerTransactions';
+import { fetchLedgerForPatients, filterLedgerRowsWithinMonths } from '../lib/ledgerTransactions';
 import {
   buildClaimsByPatientId,
   type DentrixInsuranceClaimDoc,
@@ -39,6 +39,7 @@ import {
   resolveTreatmentDate,
   dedupeEstimateRows,
   isEstimateCompleteOnLedger,
+  ESTIMATE_LEDGER_LOOKBACK_MONTHS,
   type EstimateAgeBucket,
   type EstimateFollowUpAction,
 } from '../lib/estimateTreatment';
@@ -727,7 +728,9 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
         if (cancelled) return;
         setLedgerByPatientId((prev) => {
           const next = new Map(prev);
-          map.forEach((rows, patid) => next.set(patid, rows));
+          map.forEach((rows, patid) => {
+            next.set(patid, filterLedgerRowsWithinMonths(rows, ESTIMATE_LEDGER_LOOKBACK_MONTHS));
+          });
           return next;
         });
       })
@@ -1173,8 +1176,11 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
                       void handleEstimateAction(r, 'treatment_booked', false);
                       return;
                     }
-                    const draft = bookedDateDraft[r.followUpDocId] ?? r.bookedApptDate?.slice(0, 10) ?? '';
-                    if (!draft) return;
+                    const draft =
+                      bookedDateDraft[r.followUpDocId] ??
+                      r.bookedApptDate?.slice(0, 10) ??
+                      new Date().toISOString().slice(0, 10);
+                    setBookedDateDraft((prev) => ({ ...prev, [r.followUpDocId]: draft }));
                     void handleEstimateAction(r, 'treatment_booked', true, { bookedApptDate: draft });
                   }}
                 />
@@ -1185,9 +1191,13 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
                 className="h-7 text-[10px] w-[124px]"
                 disabled={busy}
                 value={bookedDateDraft[r.followUpDocId] ?? r.bookedApptDate?.slice(0, 10) ?? ''}
-                onChange={(e) =>
-                  setBookedDateDraft((prev) => ({ ...prev, [r.followUpDocId]: e.target.value }))
-                }
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setBookedDateDraft((prev) => ({ ...prev, [r.followUpDocId]: value }));
+                  if (value && r.actionFlags?.treatment_booked) {
+                    void handleEstimateAction(r, 'treatment_booked', true, { bookedApptDate: value });
+                  }
+                }}
               />
             </div>
             <div className="flex flex-wrap gap-x-3 gap-y-1">

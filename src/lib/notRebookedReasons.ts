@@ -1,5 +1,6 @@
 export const NOT_REBOOKED_REASON_OPTIONS = [
   { value: '', label: '—' },
+  { value: 'appointment_booked', label: 'Appointment booked' },
   { value: 'cost_financial', label: 'Cost / financial' },
   { value: 'scheduling', label: 'Scheduling conflict' },
   { value: 'declined', label: 'Patient/parent declined' },
@@ -62,19 +63,45 @@ export const GUM_GRAFTING_REASON_OPTIONS = [
 ] as const;
 
 const QUEUE_REASON_REMOVES_FROM_LIST: Record<string, ReadonlySet<string>> = {
-  emerg_follow_up: new Set(['patient_booked', 'transferred']),
-  new_patient_follow_up: new Set(['patient_booked']),
+  emerg_follow_up: new Set(['patient_booked', 'transferred', 'declined']),
+  new_patient_follow_up: new Set(['patient_booked', 'transferred', 'declined']),
   no_appt_booked: new Set([
+    'appointment_booked',
     'transferred',
     'declined',
     'unreliable_dont_book',
     'voicemail_multiple',
   ]),
   ga_all_appointments: new Set(['patient_booked', 'treatment_complete']),
+  ortho_follow_ups: new Set(['ortho_complete', 'consult_booked', 'inactive_treatment']),
+  perio: new Set(['transferred', 'declined', 'treatment_complete']),
+  gum_grafting: new Set(['transferred', 'declined']),
 };
 
+/** Shared auto-remove reasons for queues that use the default why-not-rebooked list. */
+const DEFAULT_QUEUE_REASON_REMOVES = new Set([
+  'appointment_booked',
+  'transferred',
+  'declined',
+  'unreliable_dont_book',
+  'voicemail_multiple',
+]);
+
+const CUSTOM_REASON_QUEUE_IDS = new Set([
+  'emerg_follow_up',
+  'new_patient_follow_up',
+  'gum_grafting',
+  'tmj_mri',
+  'night_guard',
+  'ga_all_appointments',
+  'perio',
+  'ortho_follow_ups',
+]);
+
 export function queueReasonRemovesFromList(queueId: string, reasonValue: string): boolean {
-  return QUEUE_REASON_REMOVES_FROM_LIST[queueId]?.has(reasonValue) ?? false;
+  if (QUEUE_REASON_REMOVES_FROM_LIST[queueId]?.has(reasonValue)) return true;
+  if (!CUSTOM_REASON_QUEUE_IDS.has(queueId) && DEFAULT_QUEUE_REASON_REMOVES.has(reasonValue)) return true;
+  return false;
 }
 
 export function queueReasonRemovalPatch(
@@ -127,6 +154,7 @@ export const GA_REASON_OPTIONS = [
   { value: 'estimate_received', label: 'Estimate received' },
   { value: 'patient_booked', label: 'Patient booked' },
   { value: 'ga_ic_sent_received', label: 'GA IC sent/received' },
+  { value: 'left_msg_follow_up', label: 'Left msg for follow up' },
   { value: 'patient_undecided', label: 'Patient undecided / treatment on hold' },
   { value: 'treatment_complete', label: 'Treatment complete' },
 ] as const;
