@@ -42,7 +42,9 @@ export type EstimateFollowUpAction =
   | 'removed_from_list'
   | 'no_answer'
   | 'patient_declined'
-  | 'watch';
+  | 'watch'
+  | 'estimate_received'
+  | 'estimate_not_received';
 
 export const ESTIMATE_ACTION_LABELS: Record<EstimateFollowUpAction, string> = {
   left_voicemail: 'Left msg on machine',
@@ -54,6 +56,8 @@ export const ESTIMATE_ACTION_LABELS: Record<EstimateFollowUpAction, string> = {
   no_answer: 'No answer',
   patient_declined: 'Patient/parent declined',
   watch: 'Watch',
+  estimate_received: 'Estimate received',
+  estimate_not_received: 'Estimate not received',
 };
 
 export interface EstimateActionHistoryEntry {

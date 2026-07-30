@@ -33,7 +33,17 @@ describe('getNotRebookedReasonOptionsForQueue', () => {
     const labels = getNotRebookedReasonOptionsForQueue('extraction').map((o) => o.label);
     expect(labels).toContain('Treatment on hold');
     expect(labels).toContain("Unreliable, don't book");
+    expect(labels).toContain('Insurance maxxed out for the year');
     expect(labels).not.toContain('Medical hold');
+  });
+
+  it('uses CBCT workflow status options', () => {
+    const labels = getNotRebookedReasonOptionsForQueue('cbct').map((o) => o.label);
+    expect(labels).toContain('Estimate sent');
+    expect(labels).toContain('CBCT uploaded to portal');
+    expect(labels).toContain('Received report back');
+    expect(labels).toContain('Appointment booked');
+    expect(labels).toContain('Reviewed with patient');
   });
 
   it('uses night guard workflow options', () => {

@@ -160,7 +160,11 @@ export function isAppointmentNoShow(a: DentrixAppointmentDoc): boolean {
 export function isAppointmentCancelledOrBroken(a: DentrixAppointmentDoc): boolean {
   if (isAppointmentNoShow(a)) return true;
   const s = appointmentLabelText(a);
-  return /\b(cancelled|canceled|broken appt|brk appt)\b/i.test(s);
+  if (/\b(cancelled|canceled|broken appt|brk appt|cxl|cx'?d|oasis cancel)\b/i.test(s)) return true;
+  const sid = Number(a.status_id ?? 0);
+  // Common Dentrix broken/cancelled status ids beyond no-show set
+  if ([4, 6, 10, 11].includes(sid)) return true;
+  return false;
 }
 
 export function isActiveScheduledAppointment(a: DentrixAppointmentDoc, today: Date): boolean {

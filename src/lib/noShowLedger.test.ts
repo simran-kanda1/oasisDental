@@ -7,10 +7,11 @@ import {
 import type { DentrixLedgerTransactionDoc } from './ledgerTransactions';
 
 describe('noShowLedger', () => {
-  it('recognizes NC no-show ADA codes', () => {
+  it('recognizes NC no-show ADA codes including oasis cancelled', () => {
     for (const code of NO_SHOW_LEDGER_ADA_CODES) {
       expect(isNoShowLedgerAdaCode(code)).toBe(true);
     }
+    expect(isNoShowLedgerAdaCode('NC000027')).toBe(true);
     expect(isNoShowLedgerAdaCode('nc000021')).toBe(true);
     expect(isNoShowLedgerAdaCode('23311')).toBe(false);
   });

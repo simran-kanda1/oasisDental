@@ -125,6 +125,8 @@ const OUTREACH_TOGGLE_ACTIONS: EstimateFollowUpAction[] = [
   'left_voicemail',
   'text',
   'email',
+  'estimate_received',
+  'estimate_not_received',
 ];
 
 const CLOSE_TOGGLE_ACTIONS: EstimateFollowUpAction[] = ['patient_declined', 'removed_from_list'];
@@ -821,6 +823,8 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
     const prevHistory = parseActionHistory(prev?.actionHistory ?? prev?.outreachHistory);
 
     const actionFlags = { ...prevFlags, [action]: enabled };
+    if (enabled && action === 'estimate_received') actionFlags.estimate_not_received = false;
+    if (enabled && action === 'estimate_not_received') actionFlags.estimate_received = false;
     const historyEntry = {
       action,
       at: new Date().toISOString(),

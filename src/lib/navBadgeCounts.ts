@@ -11,23 +11,35 @@ import {
   type VisitWeekBucketFilter,
 } from '../data/queueRules';
 import {
-  formatDentrixDateKey,
   isActiveDentrixPatient,
+  parseDentrixDate,
   type DentrixAppointmentDoc,
   type DentrixPatientAppointmentInfoDoc,
   type DentrixPatientDoc,
 } from './dentrix';
+import { isActiveScheduledAppointment, isAppointmentOnOrAfterToday } from './appointmentHeuristics';
 
 export function countNoApptBookedQueue(
   patientInfoById: Record<string, DentrixPatientAppointmentInfoDoc>,
-  patientsById: Record<string, DentrixPatientDoc>
+  patientsById: Record<string, DentrixPatientDoc>,
+  appointments: DentrixAppointmentDoc[] = [],
+  now = new Date()
 ): number {
+  const futureByPatient = new Set<string>();
+  for (const a of appointments) {
+    const pid = String(a.patient_id ?? '');
+    if (!pid || !isActiveScheduledAppointment(a, now)) continue;
+    futureByPatient.add(pid);
+  }
+
   let count = 0;
   for (const info of Object.values(patientInfoById)) {
     const missed = Number(info.number_of_missed_appointments ?? 0);
     if (missed < 1) continue;
-    if (formatDentrixDateKey(info.next_appointment_date)) continue;
     const patientKey = String(info.patient_id ?? info.id);
+    if (futureByPatient.has(patientKey)) continue;
+    const nextD = parseDentrixDate(info.next_appointment_date);
+    if (nextD && isAppointmentOnOrAfterToday(nextD, now)) continue;
     const patient = patientsById[patientKey];
     if (patient && !isActiveDentrixPatient(patient)) continue;
     count += 1;
@@ -43,7 +55,7 @@ export function computeFrontDeskQueueCounts(
   ctx: QueueBuildContext = {}
 ): Record<string, number> {
   const counts: Record<string, number> = {
-    [NO_APPT_BOOKED_QUEUE_ID]: countNoApptBookedQueue(patientInfoById, patientsById),
+    [NO_APPT_BOOKED_QUEUE_ID]: countNoApptBookedQueue(patientInfoById, patientsById, appointments, now),
   };
 
   const sharedIndexes = buildQueueIndexes(appointments, { ...ctx, patientInfoById }, patientsById);

@@ -1,8 +1,8 @@
 import type { DentrixLedgerTransactionDoc } from './ledgerTransactions';
 import { normalizeProcedureCode } from './procedureCodeTypes';
 
-/** Dentrix ledger ADA codes that indicate a missed / no-show appointment. */
-export const NO_SHOW_LEDGER_ADA_CODES = ['NC000020', 'NC000021', 'NC000022'] as const;
+/** Dentrix ledger ADA codes that indicate a missed / no-show / oasis-cancelled appointment. */
+export const NO_SHOW_LEDGER_ADA_CODES = ['NC000020', 'NC000021', 'NC000022', 'NC000027'] as const;
 
 const NO_SHOW_LEDGER_CODE_SET = new Set<string>(NO_SHOW_LEDGER_ADA_CODES);
 

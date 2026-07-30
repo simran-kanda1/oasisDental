@@ -20,6 +20,10 @@ import { useFrontDeskData } from '../contexts/FrontDeskDataContext';
 import { APPOINTMENTS_QUERY_LIMIT } from '../lib/appointmentsQuery';
 import { appendTimestampedFollowUpNote, latestNotePreview } from '../lib/followUpNotes';
 import {
+    isActiveScheduledAppointment,
+    isAppointmentOnOrAfterToday,
+} from '../lib/appointmentHeuristics';
+import {
     cleanDentrixText,
     formatDentrixDateKey,
     formatDentrixTimeLabel,
@@ -32,6 +36,23 @@ import {
     type DentrixPatientAppointmentInfoDoc,
     type DentrixPatientDoc,
 } from '../lib/dentrix';
+
+function patientHasAnyFutureAppointment(
+    patientId: string,
+    appointments: DentrixAppointmentDoc[],
+    info: DentrixPatientAppointmentInfoDoc | undefined,
+    today: Date
+): boolean {
+    if (
+        appointments.some(
+            (a) => String(a.patient_id ?? '') === patientId && isActiveScheduledAppointment(a, today)
+        )
+    ) {
+        return true;
+    }
+    const nextD = parseDentrixDate(info?.next_appointment_date);
+    return !!nextD && isAppointmentOnOrAfterToday(nextD, today);
+}
 
 function buildLatestAppointmentByPatientId(
     appointments: DentrixAppointmentDoc[]
@@ -95,11 +116,13 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
     const [localLatestAppointmentByPatientId, setLocalLatestAppointmentByPatientId] = useState<
         Record<string, DentrixAppointmentDoc>
     >({});
+    const [localAllAppointments, setLocalAllAppointments] = useState<DentrixAppointmentDoc[]>([]);
     const [trackingByPatientId, setTrackingByPatientId] = useState<Record<string, FollowUpTrackingDoc>>({});
     const [logModalItem, setLogModalItem] = useState<(DentrixFollowUpWorkItem & { trackingId: string; tracking?: FollowUpTrackingDoc }) | null>(null);
 
     const patientsById = embedded ? frontDeskData.patientsById : localPatientsById;
     const patientInfoById = embedded ? frontDeskData.patientInfoById : localPatientInfoById;
+    const allAppointmentsForFutureCheck = embedded ? frontDeskData.allAppointments : localAllAppointments;
     const latestAppointmentByPatientId = useMemo(
         () =>
             embedded
@@ -151,13 +174,14 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
         const unsubAppointments = onSnapshot(
             query(collection(db, 'appointments'), orderBy('appointment_date', 'desc'), limit(APPOINTMENTS_QUERY_LIMIT)),
             (snap) => {
+                const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() } as DentrixAppointmentDoc));
+                setLocalAllAppointments(rows);
                 const map: Record<string, DentrixAppointmentDoc> = {};
-                snap.docs.forEach((d) => {
-                    const row = { id: d.id, ...d.data() } as DentrixAppointmentDoc;
+                for (const row of rows) {
                     const key = String(row.patient_id ?? '');
-                    if (!key || map[key]) return;
+                    if (!key || map[key]) continue;
                     map[key] = row;
-                });
+                }
                 setLocalLatestAppointmentByPatientId(map);
             }
         );
@@ -172,16 +196,20 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
 
     const items = useMemo(() => {
         const rows: (DentrixFollowUpWorkItem & { trackingId: string; tracking?: FollowUpTrackingDoc })[] = [];
+        const today = new Date();
+        const appointmentsForFutureCheck = allAppointmentsForFutureCheck;
+
         Object.values(patientInfoById).forEach((info) => {
             const patientKey = String(info.patient_id ?? info.id);
             const missed = Number(info.number_of_missed_appointments ?? 0);
             if (missed < 1) return;
 
-            const nextAppt = formatDentrixDateKey(info.next_appointment_date);
-            if (nextAppt) return;
-
             const patient = patientsById[patientKey];
             if (patient && !isActiveDentrixPatient(patient)) return;
+
+            if (patientHasAnyFutureAppointment(patientKey, appointmentsForFutureCheck, info, today)) {
+                return;
+            }
 
             const latestAppt = latestAppointmentByPatientId[patientKey];
             const tracking = trackingByPatientId[patientKey];
@@ -204,7 +232,7 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
                 missedAppointments: missed,
                 lastMissedDate: formatDentrixDateKey(info.last_missed_appointment_date),
                 lastAppointmentDate: formatDentrixDateKey(info.previous_appointment_date),
-                nextAppointmentDate: nextAppt,
+                nextAppointmentDate: formatDentrixDateKey(info.next_appointment_date),
                 latestReason: cleanDentrixText(latestAppt?.reason) || 'General appointment',
                 latestProvider: cleanDentrixText(latestAppt?.provider_id) || 'Unassigned',
                 latestAppointmentDate: formatDentrixDateKey(latestAppt?.appointment_date),
@@ -227,7 +255,13 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
         });
 
         return rows;
-    }, [patientInfoById, patientsById, latestAppointmentByPatientId, trackingByPatientId]);
+    }, [
+        patientInfoById,
+        patientsById,
+        latestAppointmentByPatientId,
+        trackingByPatientId,
+        allAppointmentsForFutureCheck,
+    ]);
 
     const filtered = useMemo(() => {
         const queryText = search.trim().toLowerCase();
@@ -273,7 +307,7 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
                 ...payload,
             } as FollowUpTrackingDoc,
         }));
-        await setDoc(doc(db, 'followUps', item.trackingId), payload, { merge: true });
+        void setDoc(doc(db, 'followUps', item.trackingId), payload, { merge: true });
     };
 
     const saveOutreachLog = async (

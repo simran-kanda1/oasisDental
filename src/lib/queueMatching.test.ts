@@ -1006,7 +1006,7 @@ describe('cbct and night guard queues', () => {
     expect(rows).toHaveLength(1);
   });
 
-  it('does not list CBCT from keyword text without matching codes', () => {
+  it('lists CBCT from keyword text without matching codes', () => {
     const appts: DentrixAppointmentDoc[] = [
       {
         id: 'cbct1',
@@ -1018,10 +1018,10 @@ describe('cbct and night guard queues', () => {
     ];
     const procedureCodes = [{ id: '1', proccodeid: 701, adacode: '07011', descript: 'CBCT' }];
     const rows = buildQueueRows('cbct', appts, patientsById, 0, now, 'all', 'all', { procedureCodes });
-    expect(rows).toHaveLength(0);
+    expect(rows).toHaveLength(1);
   });
 
-  it('removes CBCT once matching code is posted in ledger', () => {
+  it('does not remove CBCT when matching code is posted in ledger', () => {
     const appts: DentrixAppointmentDoc[] = [
       {
         id: 'cbct1',
@@ -1050,7 +1050,7 @@ describe('cbct and night guard queues', () => {
       procedureCodes,
       ledgerByPatientId,
     });
-    expect(rows).toHaveLength(0);
+    expect(rows).toHaveLength(1);
   });
 
   it('lists night guard when ADA code appears on the appointment visit', () => {

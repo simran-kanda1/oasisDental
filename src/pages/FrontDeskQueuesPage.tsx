@@ -128,10 +128,13 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
   const [gaTimeFilter, setGaTimeFilter] = useState<GaAppointmentTimeFilter>('all');
   const [noShowLookback, setNoShowLookback] = useState<NoShowLookbackFilter>(DEFAULT_NO_SHOW_LOOKBACK);
   const [noteDraftByApptId, setNoteDraftByApptId] = useState<Record<string, string>>({});
-  const [savingApptId, setSavingApptId] = useState<string | null>(null);
   const [saveNoticeApptId, setSaveNoticeApptId] = useState<string | null>(null);
   const [sectionSearch, setSectionSearch] = useState('');
   const [localTrackingOverride, setLocalTrackingOverride] = useState<Record<string, Partial<QueueRowTrackingDoc>>>({});
+  const [sortKey, setSortKey] = useState<'patientName' | 'detail' | 'dateLabel' | 'monthsSince' | 'provider' | 'status'>(
+    'dateLabel'
+  );
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
 
   const mergedTrackingByApptId = useMemo(
     () => ({ ...trackingByApptId, ...Object.fromEntries(
@@ -184,13 +187,38 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
   }, [activeId, allAppointments, patientsById, ageBucket, visitWeekBucket, queueBuildCtx, sharedIndexes]);
 
   const sectionSearchTrimmed = sectionSearch.trim();
-  const displayedQueueRows = useMemo(
-    () => queueRows.filter((row) => queueRowMatchesSearch(row, sectionSearch)),
-    [queueRows, sectionSearch]
-  );
+
+  const displayedQueueRows = useMemo(() => {
+    const filtered = queueRows.filter((row) => queueRowMatchesSearch(row, sectionSearch));
+    const dir = sortDir === 'asc' ? 1 : -1;
+    return [...filtered].sort((a, b) => {
+      if (sortKey === 'status') {
+        const aStatus = mergedTrackingByApptId[a.appointmentFirestoreId]?.notRebookedReason ?? '';
+        const bStatus = mergedTrackingByApptId[b.appointmentFirestoreId]?.notRebookedReason ?? '';
+        return aStatus.localeCompare(bStatus) * dir;
+      }
+      if (sortKey === 'monthsSince') {
+        return ((a.monthsSince ?? -1) - (b.monthsSince ?? -1)) * dir;
+      }
+      const av = String(a[sortKey] ?? '');
+      const bv = String(b[sortKey] ?? '');
+      return av.localeCompare(bv) * dir;
+    });
+  }, [queueRows, sectionSearch, sortKey, sortDir, mergedTrackingByApptId]);
+
+  const toggleSort = (key: typeof sortKey) => {
+    if (sortKey === key) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortKey(key);
+      setSortDir(key === 'patientName' || key === 'detail' ? 'asc' : 'desc');
+    }
+  };
 
   useEffect(() => {
     setSectionSearch('');
+    setSortKey('dateLabel');
+    setSortDir('desc');
   }, [activeId]);
 
   const useBadgeHubCounts =
@@ -244,6 +272,7 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
   const isNoApptBookedQueue = activeId === NO_APPT_BOOKED_QUEUE_ID;
   const isStandaloneQueue = isStandaloneFrontDeskQueue(activeId);
   const isGaQueue = activeId === GA_ALL_APPOINTMENTS_QUEUE_ID;
+  const isCbctQueue = activeId === 'cbct';
   const isNoShowQueue = activeId === 'no_shows_past_week';
   const showGaTimeFilter = isGaQueue;
   const showNoShowLookback = isNoShowQueue;
@@ -262,29 +291,24 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
   }, []);
 
   const persistTracking = useCallback(
-    async (appointmentFirestoreId: string, patientId: string, patch: Partial<QueueRowTrackingDoc>) => {
-      setSavingApptId(appointmentFirestoreId);
+    (appointmentFirestoreId: string, patientId: string, patch: Partial<QueueRowTrackingDoc>) => {
       setLocalTrackingOverride((prev) => ({
         ...prev,
         [appointmentFirestoreId]: { ...(prev[appointmentFirestoreId] ?? {}), ...patch },
       }));
-      try {
-        const id = queueTrackingDocId(appointmentFirestoreId);
-        await setDoc(
-          doc(db, QUEUE_ROW_TRACKING_COLLECTION, id),
-          {
-            appointmentId: id,
-            patientId,
-            queueId: activeId,
-            updatedAt: new Date().toISOString(),
-            ...patch,
-          },
-          { merge: true }
-        );
-        flashQueueSaveNotice(appointmentFirestoreId);
-      } finally {
-        setSavingApptId(null);
-      }
+      flashQueueSaveNotice(appointmentFirestoreId);
+      const id = queueTrackingDocId(appointmentFirestoreId);
+      void setDoc(
+        doc(db, QUEUE_ROW_TRACKING_COLLECTION, id),
+        {
+          appointmentId: id,
+          patientId,
+          queueId: activeId,
+          updatedAt: new Date().toISOString(),
+          ...patch,
+        },
+        { merge: true }
+      );
     },
     [activeId, flashQueueSaveNotice]
   );
@@ -301,8 +325,9 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
     !HIDE_MONTHS_AGO_QUEUES.has(activeId);
   const showProvider = activeId !== 'no_shows_past_week' && !showRootCanalTracking;
   const statusColumnLabel =
-    isGaQueue || showOrthoTracking ? 'Status' : 'Why not rebooked';
+    isGaQueue || showOrthoTracking || isCbctQueue ? 'Status' : 'Why not rebooked';
   const apptDateColumnLabel = isGaQueue && gaTimeFilter === 'upcoming_4mo' ? 'Appt date' : 'Last appt';
+  const showColumnSort = activeId === 'emerg_follow_up' || isStandaloneQueue;
 
   const showMainLoader = isNoApptBookedQueue ? false : appointmentsLoading;
   const showLedgerPendingBanner = !isNoApptBookedQueue && ledgerLoading;
@@ -510,13 +535,36 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
               <thead className="sticky top-0 z-10 bg-slate-50">
                 <tr className="bg-slate-50 border-b border-slate-200 text-[10px] font-black uppercase tracking-widest text-slate-500">
                   <th className="p-3 pl-4">
-                    Patient
+                    {showColumnSort ? (
+                      <button type="button" className="text-left uppercase tracking-widest" onClick={() => toggleSort('patientName')}>
+                        Patient{sortKey === 'patientName' ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
+                      </button>
+                    ) : (
+                      'Patient'
+                    )}
                     <span className="block font-normal normal-case text-[9px] text-slate-400 tracking-normal mt-0.5">
                       Tap row name for phone and notes
                     </span>
                   </th>
-                  <th className="p-3">Detail</th>
-                  <th className="p-3">{apptDateColumnLabel}</th>
+                  <th className="p-3">
+                    {showColumnSort ? (
+                      <button type="button" className="uppercase tracking-widest" onClick={() => toggleSort('detail')}>
+                        Detail{sortKey === 'detail' ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
+                      </button>
+                    ) : (
+                      'Detail'
+                    )}
+                  </th>
+                  <th className="p-3">
+                    {showColumnSort ? (
+                      <button type="button" className="uppercase tracking-widest" onClick={() => toggleSort('dateLabel')}>
+                        {apptDateColumnLabel}
+                        {sortKey === 'dateLabel' ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
+                      </button>
+                    ) : (
+                      apptDateColumnLabel
+                    )}
+                  </th>
                   {activeId === 'no_shows_past_week' ? (
                     <th className="p-3">Rebooked?</th>
                   ) : showRootCanalTracking ? (
@@ -530,11 +578,40 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
                     <th className="p-3">Deposit taken</th>
                   ) : (
                     <>
-                      {showMonthsAgo ? <th className="p-3">Mo ago</th> : null}
-                      {showProvider ? <th className="p-3">Provider</th> : null}
+                      {showMonthsAgo ? (
+                        <th className="p-3">
+                          {showColumnSort ? (
+                            <button type="button" className="uppercase tracking-widest" onClick={() => toggleSort('monthsSince')}>
+                              Mo ago{sortKey === 'monthsSince' ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
+                            </button>
+                          ) : (
+                            'Mo ago'
+                          )}
+                        </th>
+                      ) : null}
+                      {showProvider ? (
+                        <th className="p-3">
+                          {showColumnSort ? (
+                            <button type="button" className="uppercase tracking-widest" onClick={() => toggleSort('provider')}>
+                              Provider{sortKey === 'provider' ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
+                            </button>
+                          ) : (
+                            'Provider'
+                          )}
+                        </th>
+                      ) : null}
                     </>
                   )}
-                  <th className="p-3 min-w-[140px]">{statusColumnLabel}</th>
+                  <th className="p-3 min-w-[140px]">
+                    {showColumnSort ? (
+                      <button type="button" className="uppercase tracking-widest" onClick={() => toggleSort('status')}>
+                        {statusColumnLabel}
+                        {sortKey === 'status' ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
+                      </button>
+                    ) : (
+                      statusColumnLabel
+                    )}
+                  </th>
                   <th className="p-3 pr-4 min-w-[200px]">Notes</th>
                   <th className="p-3 pr-4 min-w-[148px]">Actions</th>
                 </tr>
@@ -570,7 +647,7 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
                             <td className="p-3">
                               <select
                                 className="w-full max-w-[88px] h-9 rounded-md border border-slate-200 text-[10px] font-bold uppercase bg-white disabled:opacity-40"
-                                disabled={savingApptId === row.appointmentFirestoreId}
+
                                 value={trackingYesNoValue(tr?.referredToSpecialist)}
                                 onChange={(e) => {
                                   const next = parseTrackingYesNo(e.target.value);
@@ -587,7 +664,7 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
                             <td className="p-3">
                               <select
                                 className="w-full max-w-[88px] h-9 rounded-md border border-slate-200 text-[10px] font-bold uppercase bg-white disabled:opacity-40"
-                                disabled={savingApptId === row.appointmentFirestoreId}
+
                                 value={trackingYesNoValue(tr?.followUpAppointmentBooked)}
                                 onChange={(e) => {
                                   const next = parseTrackingYesNo(e.target.value);
@@ -606,7 +683,7 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
                           <td className="p-3">
                             <select
                               className="w-full max-w-[88px] h-9 rounded-md border border-slate-200 text-[10px] font-bold uppercase bg-white disabled:opacity-40"
-                              disabled={savingApptId === row.appointmentFirestoreId}
+
                               value={trackingYesNoValue(tr?.startTreatment)}
                               onChange={(e) => {
                                 const next = parseTrackingYesNo(e.target.value);
@@ -624,7 +701,7 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
                           <td className="p-3">
                             <select
                               className="w-full max-w-[88px] h-9 rounded-md border border-slate-200 text-[10px] font-bold uppercase bg-white disabled:opacity-40"
-                              disabled={savingApptId === row.appointmentFirestoreId}
+
                               value={trackingYesNoValue(tr?.depositTaken)}
                               onChange={(e) => {
                                 const next = parseTrackingYesNo(e.target.value);
@@ -659,7 +736,7 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
                         <td className="p-3">
                           <select
                             className="w-full max-w-[160px] h-9 rounded-md border border-slate-200 text-[10px] font-bold uppercase bg-white disabled:opacity-40"
-                            disabled={reasonDisabled(row.rebooked) || savingApptId === row.appointmentFirestoreId}
+                            disabled={reasonDisabled(row.rebooked)}
                             value={tr?.notRebookedReason ?? ''}
                             onChange={(e) => {
                               const value = e.target.value;
@@ -690,7 +767,7 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
                           <Textarea
                             rows={2}
                             className="text-[11px] min-h-[52px] resize-y"
-                            disabled={savingApptId === row.appointmentFirestoreId}
+
                             value={noteVal}
                             onChange={(e) =>
                               setNoteDraftByApptId((prev) => ({ ...prev, [draftKey]: e.target.value }))
@@ -701,18 +778,17 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
                             <button
                               type="button"
                               className="text-[9px] font-black uppercase text-teal-700 hover:underline disabled:opacity-40"
-                              disabled={savingApptId === row.appointmentFirestoreId}
-                              onClick={() =>
+
+                              onClick={() => {
                                 persistTracking(row.appointmentFirestoreId, row.patientId, {
                                   notes: noteVal.trim() || undefined,
-                                }).then(() =>
-                                  setNoteDraftByApptId((prev) => {
-                                    const next = { ...prev };
-                                    delete next[draftKey];
-                                    return next;
-                                  })
-                                )
-                              }
+                                });
+                                setNoteDraftByApptId((prev) => {
+                                  const next = { ...prev };
+                                  delete next[draftKey];
+                                  return next;
+                                });
+                              }}
                             >
                               Save notes
                             </button>
@@ -734,7 +810,7 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
                                   size="sm"
                                   variant="outline"
                                   className="h-8 w-full text-[9px] font-black uppercase border-teal-300 text-teal-800 hover:bg-teal-50 whitespace-nowrap"
-                                  disabled={savingApptId === row.appointmentFirestoreId}
+
                                   onClick={() =>
                                     persistTracking(row.appointmentFirestoreId, row.patientId, {
                                       treatmentComplete: true,
@@ -750,7 +826,7 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
                                 size="sm"
                                 variant="outline"
                                 className="h-8 w-full text-[9px] font-black uppercase border-rose-200 text-rose-700 hover:bg-rose-50 whitespace-nowrap"
-                                disabled={savingApptId === row.appointmentFirestoreId}
+
                                 onClick={() =>
                                   persistTracking(row.appointmentFirestoreId, row.patientId, {
                                     removedFromList: true,

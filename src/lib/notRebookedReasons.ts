@@ -1,7 +1,10 @@
+const INSURANCE_MAXXED = { value: 'insurance_maxxed', label: 'Insurance maxxed out for the year' } as const;
+
 export const NOT_REBOOKED_REASON_OPTIONS = [
   { value: '', label: '—' },
   { value: 'appointment_booked', label: 'Appointment booked' },
   { value: 'cost_financial', label: 'Cost / financial' },
+  INSURANCE_MAXXED,
   { value: 'scheduling', label: 'Scheduling conflict' },
   { value: 'declined', label: 'Patient/parent declined' },
   { value: 'treatment_on_hold', label: 'Treatment on hold' },
@@ -22,6 +25,7 @@ export const NEW_PATIENT_REASON_OPTIONS = [
   { value: '', label: '—' },
   { value: 'patient_booked', label: 'Patient booked' },
   { value: 'cost_financial', label: 'Cost / financial' },
+  INSURANCE_MAXXED,
   { value: 'scheduling', label: 'Scheduling conflict' },
   { value: 'declined', label: 'Patient/parent declined' },
   { value: 'hold', label: 'Hold' },
@@ -37,6 +41,7 @@ export const EMERGENCY_REASON_OPTIONS = [
   { value: '', label: '—' },
   { value: 'patient_booked', label: 'Patient booked' },
   { value: 'cost_financial', label: 'Cost / financial' },
+  INSURANCE_MAXXED,
   { value: 'scheduling', label: 'Scheduling conflict' },
   { value: 'declined', label: 'Patient/parent declined' },
   { value: 'treatment_on_hold', label: 'Treatment on hold' },
@@ -50,6 +55,7 @@ export const EMERGENCY_REASON_OPTIONS = [
 export const GUM_GRAFTING_REASON_OPTIONS = [
   { value: '', label: '—' },
   { value: 'cost_financial', label: 'Cost / financial' },
+  INSURANCE_MAXXED,
   { value: 'scheduling', label: 'Scheduling conflict' },
   { value: 'declined', label: 'Patient/parent declined' },
   { value: 'treatment_on_hold', label: 'Treatment on hold' },
@@ -76,6 +82,7 @@ const QUEUE_REASON_REMOVES_FROM_LIST: Record<string, ReadonlySet<string>> = {
   ortho_follow_ups: new Set(['ortho_complete', 'consult_booked', 'inactive_treatment']),
   perio: new Set(['transferred', 'declined', 'treatment_complete']),
   gum_grafting: new Set(['transferred', 'declined']),
+  cbct: new Set(['appointment_booked', 'reviewed_with_patient']),
 };
 
 /** Shared auto-remove reasons for queues that use the default why-not-rebooked list. */
@@ -96,6 +103,7 @@ const CUSTOM_REASON_QUEUE_IDS = new Set([
   'ga_all_appointments',
   'perio',
   'ortho_follow_ups',
+  'cbct',
 ]);
 
 export function queueReasonRemovesFromList(queueId: string, reasonValue: string): boolean {
@@ -134,6 +142,7 @@ export const TMJ_MRI_REASON_OPTIONS = [
   { value: '', label: '—' },
   { value: 'patient_booked', label: 'Patient booked' },
   { value: 'patient_declined', label: 'Patient/parent declined' },
+  INSURANCE_MAXXED,
   { value: 'mri_requisition_given', label: 'MRI requisition given' },
   { value: 'records_appt_booked', label: 'Records appointment booked' },
   { value: 'referred_chiro_physio', label: 'Referred to chiro / physio' },
@@ -144,6 +153,7 @@ export const NIGHT_GUARD_REASON_OPTIONS = [
   { value: '', label: '—' },
   { value: 'estimate_sent', label: 'Estimate sent' },
   { value: 'estimate_received', label: 'Estimate received' },
+  INSURANCE_MAXXED,
   { value: 'booked_impression_scan', label: 'Patient booked for impression/scan' },
   { value: 'complete', label: 'Complete' },
 ] as const;
@@ -155,13 +165,25 @@ export const GA_REASON_OPTIONS = [
   { value: 'patient_booked', label: 'Patient booked' },
   { value: 'ga_ic_sent_received', label: 'GA IC sent/received' },
   { value: 'left_msg_follow_up', label: 'Left msg for follow up' },
+  INSURANCE_MAXXED,
   { value: 'patient_undecided', label: 'Patient undecided / treatment on hold' },
   { value: 'treatment_complete', label: 'Treatment complete' },
+] as const;
+
+export const CBCT_REASON_OPTIONS = [
+  { value: '', label: '—' },
+  { value: 'estimate_sent', label: 'Estimate sent' },
+  { value: 'cbct_uploaded_to_portal', label: 'CBCT uploaded to portal' },
+  { value: 'received_report_back', label: 'Received report back' },
+  { value: 'appointment_booked', label: 'Appointment booked' },
+  { value: 'reviewed_with_patient', label: 'Reviewed with patient' },
+  INSURANCE_MAXXED,
 ] as const;
 
 export const PERIO_REASON_OPTIONS = [
   { value: '', label: '—' },
   { value: 'cost_financial', label: 'Cost / financial' },
+  INSURANCE_MAXXED,
   { value: 'scheduling', label: 'Scheduling conflict' },
   { value: 'declined', label: 'Patient/parent declined' },
   { value: 'treatment_on_hold', label: 'Treatment on hold' },
@@ -178,6 +200,7 @@ export const ORTHO_FOLLOW_UP_REASON_OPTIONS = [
   { value: '', label: '—' },
   { value: 'consult_booked', label: 'Consult booked' },
   { value: 'estimate_sent_received', label: 'Estimate sent/received' },
+  INSURANCE_MAXXED,
   { value: 'ortho_records_booked', label: 'Ortho records booked' },
   { value: 'inactive_treatment', label: 'Inactive treatment' },
   { value: 'ortho_complete', label: 'Ortho complete' },
@@ -192,6 +215,7 @@ export function getNotRebookedReasonOptionsForQueue(queueId: string) {
   if (queueId === 'tmj_mri') return TMJ_MRI_REASON_OPTIONS;
   if (queueId === 'night_guard') return NIGHT_GUARD_REASON_OPTIONS;
   if (queueId === 'ga_all_appointments') return GA_REASON_OPTIONS;
+  if (queueId === 'cbct') return CBCT_REASON_OPTIONS;
   if (queueId === 'perio') return PERIO_REASON_OPTIONS;
   if (queueId === 'ortho_follow_ups') return ORTHO_FOLLOW_UP_REASON_OPTIONS;
   return NOT_REBOOKED_REASON_OPTIONS;
