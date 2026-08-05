@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  isEstimateFullyCovered,
   isTrackedTreatmentCompleted,
   resolveTreatmentDate,
-  shouldHideEstimateOnLedgerComplete,
 } from './estimateTreatment';
 import type { DocumentProcedureContext } from './procedureCodeTypes';
 import type { DentrixLedgerTransactionDoc } from './ledgerTransactions';
@@ -14,39 +14,45 @@ const crownCtx: DocumentProcedureContext = {
   insurancePlanId: null,
 };
 
-const preauthLedgerCtx: DocumentProcedureContext = {
-  ...crownCtx,
-  linkSource: 'ledger_preauth',
-  preauthId: 12345,
-};
-
-describe('shouldHideEstimateOnLedgerComplete', () => {
-  it('keeps pre-auth ledger links on the list', () => {
-    expect(shouldHideEstimateOnLedgerComplete(preauthLedgerCtx, 'ledger')).toBe(false);
+describe('isEstimateFullyCovered', () => {
+  it('keeps rows with unknown coverage on the list', () => {
+    expect(isEstimateFullyCovered(crownCtx)).toBe(false);
   });
 
-  it('keeps predetermination acknowledgement documents without preauth code type', () => {
+  it('keeps rows that are only partially covered', () => {
     expect(
-      shouldHideEstimateOnLedgerComplete(crownCtx, 'ledger', { documentStatus: 'needs_follow_up' })
+      isEstimateFullyCovered({
+        ...crownCtx,
+        primaryCodeType: { groupId: 'crown', label: 'Crown', percentCov: 80 },
+        codeTypes: [{ groupId: 'crown', label: 'Crown', percentCov: 80 }],
+      })
     ).toBe(false);
   });
 
-  it('closes preauth rows when treatment date is from ledger', () => {
+  it('hides rows only when every code type is 100% covered', () => {
     expect(
-      shouldHideEstimateOnLedgerComplete(
-        {
-          ...crownCtx,
-          primaryCodeType: { groupId: 'crown', label: 'Crown', requiresPreauth: true },
-          codeTypes: [{ groupId: 'crown', label: 'Crown', requiresPreauth: true }],
-        },
-        'ledger',
-        { documentStatus: 'needs_follow_up' }
-      )
+      isEstimateFullyCovered({
+        ...crownCtx,
+        primaryCodeType: { groupId: 'crown', label: 'Crown', percentCov: 100 },
+        codeTypes: [
+          { groupId: 'crown', label: 'Crown', percentCov: 100 },
+          { groupId: 'resto', label: 'Restorative', percentCov: 100 },
+        ],
+      })
     ).toBe(true);
   });
 
-  it('removes generic from-ledger rows when complete', () => {
-    expect(shouldHideEstimateOnLedgerComplete(crownCtx, 'ledger')).toBe(true);
+  it('keeps mixed coverage rows visible', () => {
+    expect(
+      isEstimateFullyCovered({
+        ...crownCtx,
+        primaryCodeType: { groupId: 'crown', label: 'Crown', percentCov: 100 },
+        codeTypes: [
+          { groupId: 'crown', label: 'Crown', percentCov: 100 },
+          { groupId: 'resto', label: 'Restorative', percentCov: 50 },
+        ],
+      })
+    ).toBe(false);
   });
 });
 

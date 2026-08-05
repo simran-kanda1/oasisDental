@@ -25,7 +25,7 @@ export const ESTIMATE_AGE_BUCKET_OPTIONS: { id: EstimateAgeBucket; label: string
   { id: '12+', label: '1+ year' },
 ];
 
-export const DEFAULT_ESTIMATE_AGE_BUCKET: EstimateAgeBucket = '0-1';
+export const DEFAULT_ESTIMATE_AGE_BUCKET: EstimateAgeBucket = 'all';
 
 /** Months of documents to load from Firestore before client-side aging filter. */
 export const ESTIMATE_DOCUMENT_FETCH_MONTHS = 15;
@@ -206,40 +206,52 @@ export function isPreauthInsurancePostedOnLedger(
   return ctx.codeTypes.some((t) => t.requiresPreauth);
 }
 
+function coveragePercent(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+/** Hide only when every known code type is fully covered (100%). Unknown coverage stays visible. */
+export function isEstimateFullyCovered(ctx: DocumentProcedureContext): boolean {
+  const types = ctx.codeTypes.length
+    ? ctx.codeTypes
+    : ctx.primaryCodeType
+      ? [ctx.primaryCodeType]
+      : [];
+  if (!types.length) return false;
+  return types.every((t) => {
+    const pct = coveragePercent(t.percentCov);
+    return pct !== null && pct >= 100;
+  });
+}
+
 /**
- * Hide / auto-close when ledger shows treatment complete or preauth insurance posted.
+ * @deprecated Ledger completion alone should not hide estimates — only 100% coverage does.
+ * Kept for callers/tests during the transition.
  */
 export function shouldHideEstimateOnLedgerComplete(
   ctx: DocumentProcedureContext,
-  treatmentDateSource: 'ledger' | 'document',
-  options?: { documentStatus?: 'book_right_away' | 'covered_eob' | 'needs_follow_up' | 'unclassified' }
+  _treatmentDateSource: 'ledger' | 'document',
+  _options?: { documentStatus?: 'book_right_away' | 'covered_eob' | 'needs_follow_up' | 'unclassified' }
 ): boolean {
-  if (isPreauthInsurancePostedOnLedger(ctx, treatmentDateSource)) return true;
-  if (ctx.linkSource === 'ledger_preauth') return false;
-  if (options?.documentStatus === 'needs_follow_up') return false;
-  if (ctx.linkSource === 'insurance_claim') return false;
-  if (treatmentDateSource === 'ledger') return true;
-  return true;
+  return isEstimateFullyCovered(ctx);
 }
 
-/** Whether an estimate row should be removed / auto-closed based on ledger state. */
+/** Whether an estimate row should be removed based on 100% plan coverage. */
 export function isEstimateCompleteOnLedger(
   ctx: DocumentProcedureContext,
   groupId: string,
-  ledgerRows: DentrixLedgerTransactionDoc[],
-  adaByProccodeId: Map<number, string>,
-  documentDate: Date | null,
-  treatmentDateSource: 'ledger' | 'document',
-  options?: { documentStatus?: 'book_right_away' | 'covered_eob' | 'needs_follow_up' | 'unclassified' }
+  _ledgerRows: DentrixLedgerTransactionDoc[],
+  _adaByProccodeId: Map<number, string>,
+  _documentDate: Date | null,
+  _treatmentDateSource: 'ledger' | 'document',
+  _options?: { documentStatus?: 'book_right_away' | 'covered_eob' | 'needs_follow_up' | 'unclassified' }
 ): boolean {
-  const procedureContext = filterProcedureContextByGroup(ctx, groupId);
-  if (isPreauthInsurancePostedOnLedger(procedureContext, treatmentDateSource)) return true;
-  if (
-    !isTrackedTreatmentCompleted(procedureContext, groupId, ledgerRows, adaByProccodeId, documentDate)
-  ) {
-    return false;
-  }
-  return shouldHideEstimateOnLedgerComplete(ctx, treatmentDateSource, options);
+  return isEstimateFullyCovered(filterProcedureContextByGroup(ctx, groupId));
 }
 
 /** True when tracked codes are completed in the ledger on or after the document date. */

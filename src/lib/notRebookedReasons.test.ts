@@ -44,6 +44,8 @@ describe('getNotRebookedReasonOptionsForQueue', () => {
     expect(labels).toContain('Received report back');
     expect(labels).toContain('Appointment booked');
     expect(labels).toContain('Reviewed with patient');
+    expect(labels).toContain('Moved care somewhere else');
+    expect(labels).toContain('Patient declined');
   });
 
   it('uses night guard workflow options', () => {
@@ -145,6 +147,12 @@ describe('queueReasonRemovalPatch', () => {
     expect(queueReasonRemovalPatch('ortho_follow_ups', 'ortho_complete')).toMatchObject({
       removedFromList: true,
     });
+  });
+
+  it('removes CBCT rows when care moved elsewhere or patient declined', () => {
+    expect(queueReasonRemovesFromList('cbct', 'moved_care_elsewhere')).toBe(true);
+    expect(queueReasonRemovesFromList('cbct', 'patient_declined')).toBe(true);
+    expect(queueReasonRemovesFromList('cbct', 'estimate_sent')).toBe(false);
   });
 
   it('removes default-queue rows for appointment booked, declined, or transferred', () => {

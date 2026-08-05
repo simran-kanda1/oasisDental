@@ -37,6 +37,9 @@ export type AgeBucketFilter = 'all' | '0-1' | '1-3' | '3-6' | '6-9' | '9-12' | '
 /** Recency of last qualifying visit (emerg / new patient queues). */
 export type VisitWeekBucketFilter = 'all' | 'w1' | 'w2' | 'w3' | 'w4plus';
 
+/** Emergency follow-up is only tracked for the first 6 weeks after the visit. */
+export const EMERG_FOLLOW_UP_MAX_DAYS = 42;
+
 /** GA appointments — past visits, upcoming within 4 months, or both. */
 export type GaAppointmentTimeFilter = 'past' | 'upcoming_4mo' | 'all';
 
@@ -164,8 +167,8 @@ export const STANDALONE_FRONT_DESK_QUEUE_IDS = [
 export type StandaloneFrontDeskQueueId = (typeof STANDALONE_FRONT_DESK_QUEUE_IDS)[number];
 
 export const STANDALONE_FRONT_DESK_QUEUE_DEFS: FrontDeskQueueDef[] = [
-  { id: 'emerg_follow_up', label: 'Emerg patient follow up', description: 'Had emergency visit; removed when any future appointment is booked.' },
-  { id: 'new_patient_follow_up', label: 'New patient follow up', description: 'True new-patient or initial consult visit in the last 12 months with no prior visit history and no future appointment booked.' },
+  { id: 'emerg_follow_up', label: 'Emerg patient follow up', description: 'Had emergency visit within the last 6 weeks; removed when any future appointment is booked.' },
+  { id: 'new_patient_follow_up', label: 'New patient follow up', description: 'True new-patient visit, initial consult, or a patient with only one appointment in the system. Last 12 months, no future appointment booked.' },
   {
     id: GA_ALL_APPOINTMENTS_QUEUE_ID,
     label: 'GA appointments',
@@ -175,7 +178,7 @@ export const STANDALONE_FRONT_DESK_QUEUE_DEFS: FrontDeskQueueDef[] = [
   {
     id: 'cbct',
     label: 'CBCT',
-    description: 'CBCT imaging follow-up — track estimate, portal upload, report, booking, and review. Not removed by ledger posts.',
+    description: 'CBCT imaging follow-up — track estimate, portal upload, report, booking, and review. Removed when the CBCT code is posted in the ledger.',
   },
 ];
 
@@ -280,6 +283,12 @@ export function matchesVisitWeekBucket(daysSince: number | null, bucket: VisitWe
   if (bucket === 'w3') return daysSince >= 14 && daysSince <= 20;
   if (bucket === 'w4plus') return daysSince >= 21;
   return true;
+}
+
+export function matchesEmergVisitWindow(daysSince: number | null, bucket: VisitWeekBucketFilter): boolean {
+  if (daysSince === null || daysSince < 0 || daysSince > EMERG_FOLLOW_UP_MAX_DAYS) return false;
+  if (bucket === 'w4plus') return daysSince >= 21 && daysSince <= EMERG_FOLLOW_UP_MAX_DAYS;
+  return matchesVisitWeekBucket(daysSince, bucket);
 }
 
 export function matchesAgeBucket(monthsSince: number | null, bucket: AgeBucketFilter): boolean {
@@ -448,6 +457,21 @@ function isImplantInTxOrthoAppointment(appt: DentrixAppointmentDoc): boolean {
   return /\bin\s*tx\b/i.test(label) && /\bortho\b/i.test(label);
 }
 
+function patientVisitDayCount(patientId: string, indexes: QueueBuildIndexes): number {
+  if (!patientId) return 0;
+  const days = new Set<string>();
+  for (const a of indexes.apptsByPatientId.get(patientId) ?? []) {
+    if (isAppointmentCancelledOrBroken(a)) continue;
+    const key = formatDentrixDateKey(a.appointment_date);
+    if (key) days.add(key);
+  }
+  return days.size;
+}
+
+function patientHasSingleVisitDay(patientId: string, indexes: QueueBuildIndexes): boolean {
+  return patientVisitDayCount(patientId, indexes) === 1;
+}
+
 function appointmentMatchesNewPatient(
   appt: DentrixAppointmentDoc,
   ctx: QueueBuildContext,
@@ -455,7 +479,8 @@ function appointmentMatchesNewPatient(
 ): boolean {
   const codeMatch = appointmentMatchesQueueByProcedureCodes(appt, 'new_patient_follow_up', ctx, indexes);
   if (codeMatch) return true;
-  return matchesNewPatientAppointmentText(appointmentLabelText(appt));
+  if (matchesNewPatientAppointmentText(appointmentLabelText(appt))) return true;
+  return patientHasSingleVisitDay(String(appt.patient_id ?? ''), indexes);
 }
 
 function isUpcomingOrTodayAppointment(appt: DentrixAppointmentDoc, today: Date): boolean {
@@ -520,7 +545,12 @@ function appointmentMatchesQueue(
     queueId !== GA_ALL_APPOINTMENTS_QUEUE_ID &&
     (isHygieneRecallLabel(label) || isHygieneProductionType(appt))
   ) {
-    return false;
+    if (
+      queueId !== 'new_patient_follow_up' ||
+      !patientHasSingleVisitDay(String(appt.patient_id ?? ''), indexes)
+    ) {
+      return false;
+    }
   }
 
   if (queueId === 'hygiene_cc') {
@@ -652,6 +682,7 @@ const LEDGER_POSTED_REMOVE_QUEUE_IDS = new Set<string>([
   'fillings',
   'root_canal',
   'bone_grafting',
+  'cbct',
 ]);
 
 type AppointmentQueueMatchMode = 'past_qualifying' | 'future_booked';
@@ -1015,7 +1046,9 @@ function buildCategoryQueueWeekBucket(
         if (months === null || months > NEW_PATIENT_MAX_MONTHS) return false;
         if (patientHadPriorAppointmentBeforeVisit(pid, a, indexes, patientsById)) return false;
       }
-      return matchesVisitWeekBucket(daysSincePastAppointment(a, now), weekBucket);
+      const daysSince = daysSincePastAppointment(a, now);
+      if (queueId === 'emerg_follow_up') return matchesEmergVisitWindow(daysSince, weekBucket);
+      return matchesVisitWeekBucket(daysSince, weekBucket);
     })
     .sort((a, b) => (b.appointment_date ?? '').localeCompare(a.appointment_date ?? ''))
     .slice(0, 400)
@@ -1220,7 +1253,12 @@ export function buildQueueRowCount(
         if (months === null || months > NEW_PATIENT_MAX_MONTHS) continue;
         if (patientHadPriorAppointmentBeforeVisit(pid, a, indexes, patientsById)) continue;
       }
-      if (!matchesVisitWeekBucket(daysSincePastAppointment(a, now), visitWeekBucket)) continue;
+      const daysSince = daysSincePastAppointment(a, now);
+      if (queueId === 'emerg_follow_up') {
+        if (!matchesEmergVisitWindow(daysSince, visitWeekBucket)) continue;
+      } else if (!matchesVisitWeekBucket(daysSince, visitWeekBucket)) {
+        continue;
+      }
       count++;
       if (count >= QUEUE_ROW_DISPLAY_LIMIT) return QUEUE_ROW_DISPLAY_LIMIT;
     }

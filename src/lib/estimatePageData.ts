@@ -1,9 +1,10 @@
-import { collection, documentId, getDocs, query, where } from 'firebase/firestore';
+import { collection, documentId, getDocs, limit, query, where } from 'firebase/firestore';
 import type { Firestore } from 'firebase/firestore';
 import type { DentrixPatientAppointmentInfoDoc, DentrixAppointmentDoc } from './dentrix';
 import type { DentrixInsuranceClaimDoc } from './insuranceClaimEstimates';
 import { formatDentrixDateKey } from './dentrix';
 import type { DentrixInsuredDoc } from './procedureCodeTypes';
+import type { EstimateActionHistoryEntry } from './estimateTreatment';
 
 const IN_BATCH = 30;
 const PARALLEL_BATCHES = 6;
@@ -47,8 +48,12 @@ export async function fetchClaimsForPatientIds(
 
   for (let i = 0; i < ids.length; i += IN_BATCH) {
     const chunk = ids.slice(i, i + IN_BATCH);
-    for (const field of ['patient_id', 'patientId', 'patid'] as const) {
-      const snap = await getDocs(query(collection(db, 'insurance_claims'), where(field, 'in', chunk)));
+    const snaps = await Promise.all(
+      (['patient_id', 'patientId', 'patid'] as const).map((field) =>
+        getDocs(query(collection(db, 'insurance_claims'), where(field, 'in', chunk)))
+      )
+    );
+    for (const snap of snaps) {
       snap.docs.forEach((d) => {
         if (seen.has(d.id)) return;
         seen.add(d.id);
@@ -57,6 +62,20 @@ export async function fetchClaimsForPatientIds(
     }
   }
   return out;
+}
+
+const ESTIMATE_SENT_APPOINTMENTS_LIMIT = 2000;
+
+/** Appointments flagged estimate_sent in Dentrix — avoids scanning the full appointments collection. */
+export async function fetchEstimateSentAppointments(db: Firestore): Promise<DentrixAppointmentDoc[]> {
+  const snap = await getDocs(
+    query(
+      collection(db, 'appointments'),
+      where('estimate_sent', '==', true),
+      limit(ESTIMATE_SENT_APPOINTMENTS_LIMIT)
+    )
+  );
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() } as DentrixAppointmentDoc));
 }
 
 export async function fetchPatientInfoByPatientIds(
@@ -133,4 +152,21 @@ export function buildEstimateSentLabelFromAppointments(
     if (!prev || label > prev) out[pid] = label;
   }
   return out;
+}
+
+/** Prefer Dentrix estimate-sent date; fall back to staff "estimate received" action. */
+export function resolveEstimateSentDisplayLabel(options: {
+  dentrixSentLabel?: string | null;
+  estimateReceivedAt?: unknown;
+  actionFlags?: Partial<Record<string, boolean>> | null;
+  actionHistory?: EstimateActionHistoryEntry[];
+}): string | null {
+  if (options.dentrixSentLabel) return options.dentrixSentLabel;
+  const receivedAt = formatDentrixDateKey(options.estimateReceivedAt);
+  if (receivedAt) return receivedAt;
+  if (!options.actionFlags?.estimate_received) return null;
+  const fromHistory = [...(options.actionHistory ?? [])]
+    .reverse()
+    .find((entry) => entry.action === 'estimate_received');
+  return fromHistory ? formatDentrixDateKey(fromHistory.at) ?? fromHistory.at.slice(0, 10) : new Date().toISOString().slice(0, 10);
 }

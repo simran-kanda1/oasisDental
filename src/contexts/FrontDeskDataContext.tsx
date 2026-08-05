@@ -116,13 +116,26 @@ export const FrontDeskDataProvider: React.FC<{ children: React.ReactNode }> = ({
 
     let cancelled = false;
     setLedgerLoading(true);
-    void fetchLedgerForPatients(ids)
-      .then((map) => {
-        if (!cancelled) setLedgerByPatientId(map);
-      })
-      .finally(() => {
-        if (!cancelled) setLedgerLoading(false);
+
+    const FIRST_CHUNK = 180;
+    void (async () => {
+      const first = await fetchLedgerForPatients(ids.slice(0, FIRST_CHUNK));
+      if (cancelled) return;
+      setLedgerByPatientId(first);
+      setLedgerLoading(false);
+
+      if (ids.length <= FIRST_CHUNK) return;
+      const rest = await fetchLedgerForPatients(ids.slice(FIRST_CHUNK));
+      if (cancelled) return;
+      setLedgerByPatientId((prev) => {
+        const next = new Map(prev);
+        rest.forEach((rows, patid) => next.set(patid, rows));
+        return next;
       });
+    })().catch((err) => {
+      console.error('front-desk ledger fetch failed', err);
+      if (!cancelled) setLedgerLoading(false);
+    });
 
     return () => {
       cancelled = true;

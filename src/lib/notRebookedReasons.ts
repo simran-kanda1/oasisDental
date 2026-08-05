@@ -82,7 +82,7 @@ const QUEUE_REASON_REMOVES_FROM_LIST: Record<string, ReadonlySet<string>> = {
   ortho_follow_ups: new Set(['ortho_complete', 'consult_booked', 'inactive_treatment']),
   perio: new Set(['transferred', 'declined', 'treatment_complete']),
   gum_grafting: new Set(['transferred', 'declined']),
-  cbct: new Set(['appointment_booked', 'reviewed_with_patient']),
+  cbct: new Set(['appointment_booked', 'reviewed_with_patient', 'moved_care_elsewhere', 'patient_declined']),
 };
 
 /** Shared auto-remove reasons for queues that use the default why-not-rebooked list. */
@@ -177,6 +177,8 @@ export const CBCT_REASON_OPTIONS = [
   { value: 'received_report_back', label: 'Received report back' },
   { value: 'appointment_booked', label: 'Appointment booked' },
   { value: 'reviewed_with_patient', label: 'Reviewed with patient' },
+  { value: 'moved_care_elsewhere', label: 'Moved care somewhere else' },
+  { value: 'patient_declined', label: 'Patient declined' },
   INSURANCE_MAXXED,
 ] as const;
 

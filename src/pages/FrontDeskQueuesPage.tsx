@@ -59,6 +59,14 @@ const WEEK_OPTIONS: { id: VisitWeekBucketFilter; label: string }[] = [
   { id: 'w4plus', label: '4+ weeks' },
 ];
 
+const EMERG_WEEK_OPTIONS: { id: VisitWeekBucketFilter; label: string }[] = [
+  { id: 'all', label: 'All (≤6 wks)' },
+  { id: 'w1', label: '1 week' },
+  { id: 'w2', label: '2 weeks' },
+  { id: 'w3', label: '3 weeks' },
+  { id: 'w4plus', label: '4–6 weeks' },
+];
+
 const USE_WEEK_FILTER = new Set(['emerg_follow_up', 'new_patient_follow_up']);
 
 const HIDE_MONTHS_AGO_QUEUES = new Set(['extraction']);
@@ -436,7 +444,7 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
           {showWeekFilter && (
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Since last visit</span>
-              {WEEK_OPTIONS.map((o) => (
+              {(activeId === 'emerg_follow_up' ? EMERG_WEEK_OPTIONS : WEEK_OPTIONS).map((o) => (
                 <button
                   key={o.id}
                   type="button"

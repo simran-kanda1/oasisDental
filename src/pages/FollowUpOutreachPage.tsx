@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useEffect, useRef, useCallback, useDeferredValue, startTransition } from 'react';
-import { collection, doc, onSnapshot, setDoc, query, orderBy, limit } from 'firebase/firestore';
+import { collection, doc, onSnapshot, setDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -20,7 +20,6 @@ import {
   excludeProcedureCodesFromContext,
   formatCodeTypeLabel,
   formatProcedureCodesSummary,
-  hasDisplayableEstimateCodeType,
   primaryCodeTypeFilterId,
   type DentrixCoverageTableDoc,
   type DentrixInsuredDoc,
@@ -30,21 +29,19 @@ import {
 import { buildAdaByProccodeId } from '../lib/queueProcedureCodes';
 import {
   ESTIMATE_ACTION_LABELS,
-  autoCloseCompletedEstimatePatch,
   filterProcedureContextByGroup,
   isSnoozed,
+  isEstimateFullyCovered,
   matchesEstimateAgeBucket,
   monthsSinceDate,
   parseActionHistory,
   resolveTreatmentDate,
   dedupeEstimateRows,
-  isEstimateCompleteOnLedger,
   ESTIMATE_LEDGER_LOOKBACK_MONTHS,
   type EstimateAgeBucket,
   type EstimateFollowUpAction,
 } from '../lib/estimateTreatment';
 import type { DentrixLedgerTransactionDoc } from '../lib/ledgerTransactions';
-import { parseDentrixDate } from '../lib/dentrix';
 import { FOLLOW_UP_QUEUE_OUTREACH, isOpenOutreachItem } from '../lib/followUpQueues';
 import { Loader2, Search } from 'lucide-react';
 import { cn } from '../lib/utils';
@@ -71,9 +68,11 @@ import {
   buildNextApptLabelFromPatientInfo,
   buildEstimateSentLabelFromAppointments,
   fetchClaimsForPatientIds,
+  fetchEstimateSentAppointments,
   fetchFollowUpsForDocIds,
   fetchInsuredForPatientGuids,
   fetchPatientInfoByPatientIds,
+  resolveEstimateSentDisplayLabel,
 } from '../lib/estimatePageData';
 import {
   cleanDentrixText,
@@ -82,8 +81,6 @@ import {
   type DentrixPatientAppointmentInfoDoc,
   type DentrixPatientDoc,
 } from '../lib/dentrix';
-import { APPOINTMENTS_QUERY_LIMIT } from '../lib/appointmentsQuery';
-
 export type EstimateFollowUpHubTab = 'pred_approved' | 'pred_follow_up';
 
 export interface FollowUpOutreachPageProps {
@@ -197,7 +194,6 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
   const [pendingRemovalIds, setPendingRemovalIds] = useState<Set<string>>(() => new Set());
   const [undoClose, setUndoClose] = useState<UndoCloseState | null>(null);
   const undoTimerRef = useRef<number | null>(null);
-  const autoClosedLedgerRef = useRef(new Set<string>());
 
   const authorName = userProfile?.displayName ?? user?.email ?? 'User';
 
@@ -209,10 +205,17 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
   }, []);
 
   useEffect(() => {
-    return onSnapshot(
-      query(collection(db, 'appointments'), orderBy('appointment_date', 'desc'), limit(APPOINTMENTS_QUERY_LIMIT)),
-      (snap) => setAppointments(snap.docs.map((d) => ({ id: d.id, ...d.data() } as DentrixAppointmentDoc)))
-    );
+    let cancelled = false;
+    void fetchEstimateSentAppointments(db)
+      .then((rows) => {
+        if (!cancelled) setAppointments(rows);
+      })
+      .catch((err) => {
+        console.error('estimate-sent appointments fetch failed', err);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -259,7 +262,7 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
       cancelled = true;
       unsubProcCodes();
     };
-  }, [ageBucket]);
+  }, []);
 
   useEffect(() => {
     const candidates = filterEstimateCandidateDocuments(documents, 'all');
@@ -427,65 +430,11 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
     if (fu && isSnoozed(fu.snoozeUntil)) return false;
     if (!fu) return true;
     if (item.workflowStatus === 'covered_eob') return fu.documentCoveredNoted !== true;
-    if (fu.autoClosedLedger === true || fu.treatmentFinished === true) {
-      if (isLedgerCompletedForItem(item)) return false;
-      return true;
-    }
-    if (fu.status === 'closed' || fu.removedFromList === true) {
+    if (fu.treatmentFinished === true || fu.removedFromList === true || fu.status === 'closed') {
       return false;
     }
     return isOpenOutreachItem(fu as Record<string, unknown>);
   };
-
-  const isLedgerCompletedForItem = useCallback(
-    (d: (typeof documentWorkItems)[0], filterGroupId?: string) => {
-      const patientLedger = ledgerByPatientId.get(Number(d.patientId)) ?? [];
-      const fullContext = buildDocumentProcedureContext({
-        descript: d.descript,
-        patientId: d.patientId,
-        patientGuid: d.patientGuid,
-        documentDate: d.createdate,
-        ledgerRows: patientLedger,
-        insuranceClaims: claimsByPatientId.get(Number(d.patientId)) ?? [],
-        procedureCodes,
-        insuredByGuid,
-        coverageByPlanId,
-        estimateSent: !!estimateSentByPatientId[d.patientId],
-      });
-      const activeGroupId =
-        filterGroupId ??
-        (codeTypeFilter !== ESTIMATE_CODE_TYPE_FILTER_ALL
-          ? codeTypeFilter
-          : primaryCodeTypeFilterId(fullContext));
-      const procedureContext = filterProcedureContextByGroup(fullContext, activeGroupId);
-      const treatment = resolveTreatmentDate(
-        procedureContext,
-        d.createdate,
-        activeGroupId,
-        patientLedger,
-        adaByProccodeId
-      );
-      return isEstimateCompleteOnLedger(
-        fullContext,
-        activeGroupId,
-        patientLedger,
-        adaByProccodeId,
-        parseDentrixDate(d.createdate),
-        treatment.source,
-        { documentStatus: d.workflowStatus }
-      );
-    },
-    [
-      ledgerByPatientId,
-      claimsByPatientId,
-      procedureCodes,
-      insuredByGuid,
-      coverageByPlanId,
-      codeTypeFilter,
-      adaByProccodeId,
-      estimateSentByPatientId,
-    ]
-  );
 
   const mapDocumentRow = (
     d: (typeof documentWorkItems)[0],
@@ -542,9 +491,13 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
       adaByProccodeId
     );
 
-    const ledgerLoaded = ledgerByPatientId.has(Number(d.patientId));
-    const estimateSentLabel = estimateSentByPatientId[d.patientId] ?? null;
-    if (ledgerLoaded && isLedgerCompletedForItem(d, activeGroupId)) {
+    const estimateSentLabel = resolveEstimateSentDisplayLabel({
+      dentrixSentLabel: estimateSentByPatientId[d.patientId] ?? null,
+      estimateReceivedAt: fu?.estimateReceivedAt,
+      actionFlags: (fu?.actionFlags as DocumentEstimateRow['actionFlags']) ?? {},
+      actionHistory: parseActionHistory(fu?.actionHistory ?? fu?.outreachHistory),
+    });
+    if (isEstimateFullyCovered(procedureContext)) {
       return null;
     }
 
@@ -586,7 +539,6 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
       })
       .map((d) => mapDocumentRow(d, deferredFollowUpByDocId))
       .filter((r): r is DocumentEstimateRow => !!r)
-      .filter((r) => hasDisplayableEstimateCodeType(r.procedureContext))
     );
   }, [
     deferredWorkItems,
@@ -684,35 +636,6 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
   useEffect(() => {
     document.querySelector('main')?.scrollTo({ top: 0, behavior: 'smooth' });
   }, [safePage, tab]);
-
-  useEffect(() => {
-    if (!visibleRows.length) return;
-
-    for (const row of visibleRows) {
-      const d = documentWorkItems.find((w) => w.followUpDocId === row.followUpDocId);
-      if (!d) continue;
-      if (!ledgerByPatientId.has(Number(d.patientId))) continue;
-      const fu = followUpByDocId[d.followUpDocId];
-      if (fu?.treatmentFinished === true || fu?.autoClosedLedger === true) continue;
-      if (autoClosedLedgerRef.current.has(d.followUpDocId)) continue;
-      if (!isLedgerCompletedForItem(d)) continue;
-
-      autoClosedLedgerRef.current.add(d.followUpDocId);
-      void setDoc(
-        doc(db, 'followUps', d.followUpDocId),
-        {
-          source: 'document_center',
-          queue: FOLLOW_UP_QUEUE_OUTREACH,
-          patient_id: Number(d.patientId),
-          patient_name: d.patientName,
-          dentrix_doc_id: d.docId,
-          document_descript: d.descript,
-          ...autoCloseCompletedEstimatePatch(authorName),
-        },
-        { merge: true }
-      );
-    }
-  }, [visibleRows, documentWorkItems, followUpByDocId, isLedgerCompletedForItem, authorName, ledgerByPatientId]);
 
   const ledgerPatientIds = useMemo(
     () => [...new Set(visibleRows.map((r) => r.patientId))],
@@ -825,6 +748,12 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
     const actionFlags = { ...prevFlags, [action]: enabled };
     if (enabled && action === 'estimate_received') actionFlags.estimate_not_received = false;
     if (enabled && action === 'estimate_not_received') actionFlags.estimate_received = false;
+    const estimateReceivedAt =
+      enabled && action === 'estimate_received'
+        ? new Date().toISOString()
+        : action === 'estimate_received' && !enabled
+          ? null
+          : (prev?.estimateReceivedAt ?? null);
     const historyEntry = {
       action,
       at: new Date().toISOString(),
@@ -858,6 +787,7 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
           : prev?.removedFromList === true,
       bookedApptDate: extra?.bookedApptDate ?? prev?.bookedApptDate ?? null,
       snoozeUntil: extra?.snoozeUntil ?? prev?.snoozeUntil ?? null,
+      estimateReceivedAt,
     };
   };
 
@@ -944,7 +874,12 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
       expiresAt: Date.now() + 5000,
     });
 
-    const patch = buildActionPatch(row, 'treatment_finished', true);
+    const patch = {
+      ...buildActionPatch(row, 'treatment_finished', true),
+      removedFromList: true,
+      treatmentFinished: true,
+      status: 'closed',
+    };
     applyFollowUpPatch(row.followUpDocId, patch);
     setSavingId(row.followUpDocId);
     try {

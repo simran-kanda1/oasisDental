@@ -1021,7 +1021,7 @@ describe('cbct and night guard queues', () => {
     expect(rows).toHaveLength(1);
   });
 
-  it('does not remove CBCT when matching code is posted in ledger', () => {
+  it('removes CBCT when matching code is posted in ledger', () => {
     const appts: DentrixAppointmentDoc[] = [
       {
         id: 'cbct1',
@@ -1050,7 +1050,7 @@ describe('cbct and night guard queues', () => {
       procedureCodes,
       ledgerByPatientId,
     });
-    expect(rows).toHaveLength(1);
+    expect(rows).toHaveLength(0);
   });
 
   it('lists night guard when ADA code appears on the appointment visit', () => {
@@ -1223,6 +1223,13 @@ describe('new_patient_follow_up queue', () => {
   it('does not list routine periodic exam visits for established patients', () => {
     const appts: DentrixAppointmentDoc[] = [
       {
+        id: 'old',
+        patient_id: 1,
+        patient_name: 'Pat One',
+        appointment_date: '2024-05-01T10:00:00',
+        reason: '4M prophy',
+      },
+      {
         id: 'recent',
         patient_id: 1,
         patient_name: 'Pat One',
@@ -1237,8 +1244,15 @@ describe('new_patient_follow_up queue', () => {
     expect(rows).toHaveLength(0);
   });
 
-  it('does not match generic exam text without new patient wording', () => {
+  it('does not match generic exam text without new patient wording when other visits exist', () => {
     const appts: DentrixAppointmentDoc[] = [
+      {
+        id: 'old',
+        patient_id: 1,
+        patient_name: 'Pat One',
+        appointment_date: '2025-01-01T10:00:00',
+        reason: '4M prophy',
+      },
       {
         id: 'recent',
         patient_id: 1,
@@ -1251,6 +1265,22 @@ describe('new_patient_follow_up queue', () => {
       procedureCodes: npProcedureCodes,
     });
     expect(rows).toHaveLength(0);
+  });
+
+  it('lists a single-appointment patient even without new-patient codes', () => {
+    const appts: DentrixAppointmentDoc[] = [
+      {
+        id: 'only',
+        patient_id: 1,
+        patient_name: 'Pat One',
+        appointment_date: '2026-05-01T10:00:00',
+        reason: 'Exam and cleaning',
+      },
+    ];
+    const rows = buildQueueRows('new_patient_follow_up', appts, patientsById, 0, now, 'all', 'w4plus', {
+      procedureCodes: npProcedureCodes,
+    });
+    expect(rows).toHaveLength(1);
   });
 
   it('drops new patients when any future appointment is booked', () => {
@@ -1291,7 +1321,7 @@ describe('emerg_follow_up queue', () => {
         id: 'past-emerg',
         patient_id: 1,
         patient_name: 'Pat One',
-        appointment_date: '2026-05-01T10:00:00',
+        appointment_date: '2026-05-20T10:00:00',
         reason: 'Emergency pain',
       },
       {
@@ -1313,13 +1343,28 @@ describe('emerg_follow_up queue', () => {
         id: 'past-emerg',
         patient_id: 1,
         patient_name: 'Pat One',
-        appointment_date: '2026-05-01T10:00:00',
+        appointment_date: '2026-05-20T10:00:00',
         reason: 'Emergency pain',
       },
     ];
 
     const rows = buildQueueRows('emerg_follow_up', appts, patientsById, 0, now, 'all', 'all', {});
     expect(rows).toHaveLength(1);
+  });
+
+  it('hides emergency visits older than 6 weeks', () => {
+    const appts: DentrixAppointmentDoc[] = [
+      {
+        id: 'old-emerg',
+        patient_id: 1,
+        patient_name: 'Pat One',
+        appointment_date: '2026-04-20T10:00:00',
+        reason: 'Emergency pain',
+      },
+    ];
+
+    const rows = buildQueueRows('emerg_follow_up', appts, patientsById, 0, now, 'all', 'all', {});
+    expect(rows).toHaveLength(0);
   });
 });
 
