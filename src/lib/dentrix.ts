@@ -23,7 +23,7 @@ export interface DentrixAppointmentDoc {
   status_id?: number;
   production_type?: number;
   amount?: number;
-  /** When true, estimate was sent — drives Queues vs Estimates page */
+  /** Not reliably synced — estimate-sent is derived from documents + ledger + appointment date/time. */
   estimate_sent?: boolean;
 }
 

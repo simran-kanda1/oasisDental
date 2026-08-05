@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
   classifyDocumentEstimateStatus,
+  classifyEstimateDocumentCategory,
   collectCodesCoveredByPredeterminationResponses,
+  countEstimateDocumentCategories,
   documentsSharePredeterminationAssociation,
   isClaimAcknowledgement,
   isPredApprovedDocumentStatus,
   isPredFollowUpDocumentStatus,
   isPredeterminationResponseDocument,
+  predAckClearedByResponseDocument,
 } from './documentEstimates';
 import type { DocumentProcedureContext } from './procedureCodeTypes';
 
@@ -29,13 +32,17 @@ describe('classifyDocumentEstimateStatus', () => {
     expect(isPredFollowUpDocumentStatus('covered_eob')).toBe(false);
   });
 
-  it('routes generic EOB to pre-d approved only', () => {
-    expect(classifyDocumentEstimateStatus('Explanation of benefits')).toBe('covered_eob');
-    expect(isPredFollowUpDocumentStatus('covered_eob')).toBe(false);
+  it('keeps generic claim EOBs off the estimate tabs', () => {
+    expect(classifyDocumentEstimateStatus('Explanation of benefits')).toBe('unclassified');
+    expect(isPredApprovedDocumentStatus('unclassified')).toBe(false);
   });
 
-  it('routes bare explanation to book right away', () => {
-    expect(classifyDocumentEstimateStatus('Explanation for crown')).toBe('book_right_away');
+  it('routes pred errors and office estimate paperwork onto the list', () => {
+    expect(classifyDocumentEstimateStatus('Error in Pre-Determination')).toBe('needs_follow_up');
+    expect(classifyDocumentEstimateStatus('est rcvd')).toBe('book_right_away');
+    expect(classifyDocumentEstimateStatus('CBCT Estimate')).toBe('book_right_away');
+    expect(classifyDocumentEstimateStatus('Estimate Received')).toBe('book_right_away');
+    expect(isPredApprovedDocumentStatus('book_right_away')).toBe(true);
   });
 });
 
@@ -45,6 +52,7 @@ describe('predetermination response documents', () => {
     expect(classifyDocumentEstimateStatus('Claim acknowledgment')).toBe('unclassified');
     expect(isPredeterminationResponseDocument('Claim acknowledgment')).toBe(true);
     expect(isPredeterminationResponseDocument('Explanation of benefits')).toBe(true);
+    expect(isPredeterminationResponseDocument('Predetermination Explanation of Benefits')).toBe(true);
   });
 
   it('links response documents by shared preauth or claim id', () => {
@@ -129,5 +137,43 @@ describe('predetermination response documents', () => {
     });
 
     expect([...covered].sort()).toEqual(['23111', '27201']);
+  });
+});
+
+describe('estimate document categories', () => {
+  it('splits loaded documents into pred, claim ack, EOB, and other', () => {
+    expect(classifyEstimateDocumentCategory('Pre-determination acknowledgement')).toBe('pred_ack');
+    expect(classifyEstimateDocumentCategory('Error in Pre-Determination')).toBe('pred_error');
+    expect(classifyEstimateDocumentCategory('Predetermination Explanation of Benefits')).toBe('pred_eob');
+    expect(classifyEstimateDocumentCategory('CBCT Estimate')).toBe('office_estimate');
+    expect(classifyEstimateDocumentCategory('Claim acknowledgment')).toBe('claim_ack');
+    expect(classifyEstimateDocumentCategory('Explanation of benefits')).toBe('generic_eob');
+    expect(classifyEstimateDocumentCategory('Referral letter')).toBe('other');
+
+    const counts = countEstimateDocumentCategories([
+      { descript: 'Pre-determination acknowledgement 100' },
+      { descript: 'Claim acknowledgment 100' },
+      { descript: 'Explanation of benefits' },
+      { descript: 'Explanation of benefits' },
+      { descript: 'Welcome packet' },
+    ]);
+    expect(counts.pred_ack).toBe(1);
+    expect(counts.claim_ack).toBe(1);
+    expect(counts.generic_eob).toBe(2);
+    expect(counts.other).toBe(1);
+  });
+
+  it('flags pred acks that share an id with a claim ack or EOB', () => {
+    expect(
+      predAckClearedByResponseDocument('Pre-determination acknowledgement 5001', [
+        { descript: 'Claim acknowledgment 5001' },
+        { descript: 'Welcome packet' },
+      ])
+    ).toBe(true);
+    expect(
+      predAckClearedByResponseDocument('Pre-determination acknowledgement 5001', [
+        { descript: 'Claim acknowledgment 9999' },
+      ])
+    ).toBe(false);
   });
 });

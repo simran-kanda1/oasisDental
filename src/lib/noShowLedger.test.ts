@@ -27,4 +27,15 @@ describe('noShowLedger', () => {
     };
     expect(ledgerRowIndicatesNoShow(row, adaByProccodeId)).toBe(true);
   });
+
+  it('detects no-show from ledger description when ADA map is empty', () => {
+    const row: DentrixLedgerTransactionDoc = {
+      id: 'l2',
+      patid: 1,
+      proccodeid: 1,
+      procdate: '2026-06-20T10:00:00Z',
+      descript: 'Oasis cancelled / no show fee',
+    };
+    expect(ledgerRowIndicatesNoShow(row, new Map())).toBe(true);
+  });
 });

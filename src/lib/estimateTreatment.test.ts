@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  applyLedgerCoverageToContext,
+  coveragePercentFromLedgerAmounts,
   isEstimateFullyCovered,
   isTrackedTreatmentCompleted,
   resolveTreatmentDate,
@@ -14,45 +16,128 @@ const crownCtx: DocumentProcedureContext = {
   insurancePlanId: null,
 };
 
-describe('isEstimateFullyCovered', () => {
-  it('keeps rows with unknown coverage on the list', () => {
-    expect(isEstimateFullyCovered(crownCtx)).toBe(false);
+describe('coveragePercentFromLedgerAmounts', () => {
+  it('returns null when fee or insurance has not posted', () => {
+    expect(coveragePercentFromLedgerAmounts(907, 0, 0)).toBeNull();
+    expect(coveragePercentFromLedgerAmounts(0, 100, 0)).toBeNull();
   });
 
-  it('keeps rows that are only partially covered', () => {
+  it('uses primary plus secondary insurance against the fee', () => {
+    expect(coveragePercentFromLedgerAmounts(200, 100, 100)).toBe(100);
+    expect(coveragePercentFromLedgerAmounts(200, 80, 20)).toBe(50);
+  });
+});
+
+describe('isEstimateFullyCovered', () => {
+  const adaByProccodeId = new Map<number, string>([
+    [100, '27201'],
+    [200, '23321'],
+  ]);
+
+  it('keeps rows with unknown ledger coverage on the list', () => {
+    expect(isEstimateFullyCovered(crownCtx)).toBe(false);
     expect(
-      isEstimateFullyCovered({
-        ...crownCtx,
-        primaryCodeType: { groupId: 'crown', label: 'Crown', percentCov: 80 },
-        codeTypes: [{ groupId: 'crown', label: 'Crown', percentCov: 80 }],
-      })
+      isEstimateFullyCovered(crownCtx, [{ id: '1', patid: 1, proccodeid: 100, amt: 907, amtpriminspaid: 0 }], adaByProccodeId)
     ).toBe(false);
   });
 
-  it('hides rows only when every code type is 100% covered', () => {
-    expect(
-      isEstimateFullyCovered({
-        ...crownCtx,
-        primaryCodeType: { groupId: 'crown', label: 'Crown', percentCov: 100 },
-        codeTypes: [
-          { groupId: 'crown', label: 'Crown', percentCov: 100 },
-          { groupId: 'resto', label: 'Restorative', percentCov: 100 },
-        ],
-      })
-    ).toBe(true);
+  it('keeps rows that are only partially covered on the ledger', () => {
+    const ledger: DentrixLedgerTransactionDoc[] = [
+      { id: '1', patid: 1, proccodeid: 100, amt: 200, amtpriminspaid: 160, amtsecinspaid: 0, chartstatus: 102 },
+    ];
+    expect(isEstimateFullyCovered(crownCtx, ledger, adaByProccodeId)).toBe(false);
+  });
+
+  it('hides rows only when every tracked ledger procedure is 100% covered', () => {
+    const ctx: DocumentProcedureContext = {
+      ...crownCtx,
+      procedureCodes: [
+        { code: '27201', description: 'Crown' },
+        { code: '23321', description: 'Composite' },
+      ],
+      codeTypes: [
+        { groupId: 'crown', label: 'Crown' },
+        { groupId: 'resto', label: 'Restorative' },
+      ],
+    };
+    const ledger: DentrixLedgerTransactionDoc[] = [
+      { id: '1', patid: 1, proccodeid: 100, amt: 907, amtpriminspaid: 907, amtsecinspaid: 0, chartstatus: 102 },
+      { id: '2', patid: 1, proccodeid: 200, amt: 250, amtpriminspaid: 200, amtsecinspaid: 50, chartstatus: 102 },
+    ];
+    expect(isEstimateFullyCovered(ctx, ledger, adaByProccodeId)).toBe(true);
   });
 
   it('keeps mixed coverage rows visible', () => {
+    const ctx: DocumentProcedureContext = {
+      ...crownCtx,
+      procedureCodes: [
+        { code: '27201', description: 'Crown' },
+        { code: '23321', description: 'Composite' },
+      ],
+    };
+    const ledger: DentrixLedgerTransactionDoc[] = [
+      { id: '1', patid: 1, proccodeid: 100, amt: 907, amtpriminspaid: 907, amtsecinspaid: 0, chartstatus: 102 },
+      { id: '2', patid: 1, proccodeid: 200, amt: 250, amtpriminspaid: 125, amtsecinspaid: 0, chartstatus: 102 },
+    ];
+    expect(isEstimateFullyCovered(ctx, ledger, adaByProccodeId)).toBe(false);
+  });
+
+  it('prefers preauth-linked ledger lines over other history for the same code', () => {
+    const ctx: DocumentProcedureContext = {
+      ...crownCtx,
+      preauthId: 9002,
+    };
+    const ledger: DentrixLedgerTransactionDoc[] = [
+      {
+        id: 'old',
+        patid: 1,
+        proccodeid: 100,
+        amt: 800,
+        amtpriminspaid: 400,
+        preauthid: 111,
+        chartstatus: 102,
+      },
+      {
+        id: 'linked',
+        patid: 1,
+        proccodeid: 100,
+        amt: 907,
+        amtpriminspaid: 907,
+        preauthid: 9002,
+        chartstatus: 102,
+      },
+    ];
+    expect(isEstimateFullyCovered(ctx, ledger, adaByProccodeId)).toBe(true);
+  });
+
+  it('falls back to code-type percent only when no procedure codes are linked', () => {
     expect(
       isEstimateFullyCovered({
-        ...crownCtx,
+        procedureCodes: [],
+        codeTypes: [{ groupId: 'crown', label: 'Crown', percentCov: 100 }],
         primaryCodeType: { groupId: 'crown', label: 'Crown', percentCov: 100 },
-        codeTypes: [
-          { groupId: 'crown', label: 'Crown', percentCov: 100 },
-          { groupId: 'resto', label: 'Restorative', percentCov: 50 },
-        ],
+        insurancePlanId: null,
       })
-    ).toBe(false);
+    ).toBe(true);
+  });
+});
+
+describe('applyLedgerCoverageToContext', () => {
+  it('copies ledger insurance amounts onto code types for display', () => {
+    const adaByProccodeId = new Map<number, string>([[100, '27201']]);
+    const ctx: DocumentProcedureContext = {
+      ...crownCtx,
+      codeTypes: [{ groupId: 'crown', label: 'Crown', percentCov: 0 }],
+      primaryCodeType: { groupId: 'crown', label: 'Crown', percentCov: 0 },
+    };
+    const next = applyLedgerCoverageToContext(
+      ctx,
+      [{ id: '1', patid: 1, proccodeid: 100, amt: 200, amtpriminspaid: 160, amtsecinspaid: 0 }],
+      adaByProccodeId
+    );
+    expect(next.primaryCodeType?.percentCov).toBe(80);
+    expect(next.procedureCodes[0]?.primaryInsurancePortion).toBe(160);
+    expect(next.procedureCodes[0]?.chargeAmount).toBe(200);
   });
 });
 

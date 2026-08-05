@@ -14,6 +14,10 @@ export interface DentrixLedgerTransactionDoc {
   preauthid?: number;
   claimid?: number;
   adacode?: string;
+  descript?: string;
+  description?: string;
+  note?: string;
+  notes?: string;
   amt?: number;
   amtpriminspaid?: number;
   amtsecinspaid?: number;
@@ -32,6 +36,7 @@ export interface LedgerProcedureLine {
   claimid?: number;
   amt?: number;
   primaryInsurancePaid?: number;
+  secondaryInsurancePaid?: number;
 }
 
 export interface LedgerPreauthGroup {
@@ -162,6 +167,8 @@ function toLedgerLine(row: DentrixLedgerTransactionDoc): LedgerProcedureLine | n
     amt: typeof row.amt === 'number' ? row.amt : undefined,
     primaryInsurancePaid:
       typeof row.amtpriminspaid === 'number' ? row.amtpriminspaid : undefined,
+    secondaryInsurancePaid:
+      typeof row.amtsecinspaid === 'number' ? row.amtsecinspaid : undefined,
   };
 }
 

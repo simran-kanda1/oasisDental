@@ -187,9 +187,39 @@ export function isPredeterminationAcknowledgement(descript: string): boolean {
 export function isPredeterminationExplanationOfBenefits(descript: string): boolean {
   const d = descript.trim().toLowerCase();
   return (
-    d.includes('predetermination') &&
+    (d.includes('predetermination') || d.includes('pre-determination')) &&
     (d.includes('explanation of benefits') || d.includes('explanation of benefit'))
   );
+}
+
+export function isPredeterminationError(descript: string): boolean {
+  const d = descript.trim().toLowerCase();
+  return d.includes('error') && (d.includes('pre-determination') || d.includes('predetermination'));
+}
+
+export function isGenericExplanationOfBenefits(descript: string): boolean {
+  const d = descript.trim().toLowerCase();
+  if (isPredeterminationExplanationOfBenefits(descript)) return false;
+  return d.includes('explanation of benefits') || d.includes('explanation of benefit');
+}
+
+/** Office-created estimate paperwork (not a Dentrix pred ack / pred EOB). */
+export function isOfficeEstimateDocument(descript: string): boolean {
+  const d = descript.trim().toLowerCase();
+  if (!d) return false;
+  if (isPredeterminationAcknowledgement(descript)) return false;
+  if (isPredeterminationExplanationOfBenefits(descript)) return false;
+  if (isPredeterminationError(descript)) return false;
+  if (isGenericExplanationOfBenefits(descript)) return false;
+  if (/\best\b/.test(d) && /\brcvd\b/.test(d)) return true;
+  if (d.includes('estimate received') || d.includes('estimates received')) return true;
+  return d.includes('estimate');
+}
+
+export function isEstimateReceivedDocument(descript: string): boolean {
+  const d = descript.trim().toLowerCase();
+  if (/\best\b/.test(d) && /\brcvd\b/.test(d)) return true;
+  return d.includes('estimate received') || d.includes('estimates received');
 }
 
 /** Claim acknowledgment documents are excluded from estimate tabs but can close pred-ack codes. */
@@ -202,8 +232,11 @@ export function isClaimAcknowledgement(descript: string): boolean {
 
 /** EOB or claim acknowledgment tied to a predetermination request. */
 export function isPredeterminationResponseDocument(descript: string): boolean {
-  const status = classifyDocumentEstimateStatus(descript);
-  return status === 'covered_eob' || isClaimAcknowledgement(descript);
+  return (
+    isPredeterminationExplanationOfBenefits(descript) ||
+    isGenericExplanationOfBenefits(descript) ||
+    isClaimAcknowledgement(descript)
+  );
 }
 
 /** Whether a response document (EOB / claim ack) references the same predetermination as the ack row. */
@@ -267,12 +300,11 @@ export function collectCodesCoveredByPredeterminationResponses(options: {
 }
 
 export function classifyDocumentEstimateStatus(descript: string): DocumentEstimateWorkflowStatus {
-  const d = descript.trim().toLowerCase();
-  if (!d) return 'unclassified';
+  if (!descript.trim()) return 'unclassified';
   if (isPredeterminationAcknowledgement(descript)) return 'needs_follow_up';
+  if (isPredeterminationError(descript)) return 'needs_follow_up';
   if (isPredeterminationExplanationOfBenefits(descript)) return 'covered_eob';
-  if (d.includes('explanation of benefits') || d.includes('explanation of benefit')) return 'covered_eob';
-  if (d.includes('explanation')) return 'book_right_away';
+  if (isOfficeEstimateDocument(descript)) return 'book_right_away';
   return 'unclassified';
 }
 
@@ -391,4 +423,82 @@ export function isPredApprovedDocumentStatus(status: DocumentEstimateWorkflowSta
 
 export function isPredFollowUpDocumentStatus(status: DocumentEstimateWorkflowStatus): boolean {
   return status === 'needs_follow_up';
+}
+
+export type EstimateDocumentCategory =
+  | 'pred_ack'
+  | 'pred_error'
+  | 'pred_eob'
+  | 'office_estimate'
+  | 'claim_ack'
+  | 'generic_eob'
+  | 'other';
+
+export const ESTIMATE_DOCUMENT_CATEGORY_DEFS: {
+  id: EstimateDocumentCategory;
+  label: string;
+  hint: string;
+}[] = [
+  { id: 'pred_ack', label: 'Predetermination acknowledgement', hint: 'Acknowledgment tab' },
+  { id: 'pred_error', label: 'Predetermination error', hint: 'Acknowledgment tab' },
+  { id: 'pred_eob', label: 'Predetermination EOB', hint: 'Pre-d approved tab' },
+  { id: 'office_estimate', label: 'Office estimate / est rcvd', hint: 'Pre-d approved tab' },
+  { id: 'claim_ack', label: 'Claim acknowledgment', hint: 'Not listed — closes matching pred acks' },
+  { id: 'generic_eob', label: 'Explanation of benefits', hint: 'Not listed — claim EOB, not a pred' },
+  { id: 'other', label: 'Other documents', hint: 'Not estimate paperwork' },
+];
+
+export function emptyEstimateDocumentCategoryCounts(): Record<EstimateDocumentCategory, number> {
+  return {
+    pred_ack: 0,
+    pred_error: 0,
+    pred_eob: 0,
+    office_estimate: 0,
+    claim_ack: 0,
+    generic_eob: 0,
+    other: 0,
+  };
+}
+
+export function classifyEstimateDocumentCategory(descript: string): EstimateDocumentCategory {
+  const d = descript.trim();
+  if (!d) return 'other';
+  if (isPredeterminationAcknowledgement(d)) return 'pred_ack';
+  if (isPredeterminationError(d)) return 'pred_error';
+  if (isPredeterminationExplanationOfBenefits(d)) return 'pred_eob';
+  if (isClaimAcknowledgement(d)) return 'claim_ack';
+  if (isGenericExplanationOfBenefits(d)) return 'generic_eob';
+  if (isOfficeEstimateDocument(d)) return 'office_estimate';
+  return 'other';
+}
+
+export function countEstimateDocumentCategories(
+  documents: Pick<DentrixDocumentDoc, 'descript'>[]
+): Record<EstimateDocumentCategory, number> {
+  const counts = emptyEstimateDocumentCategoryCounts();
+  for (const doc of documents) {
+    counts[classifyEstimateDocumentCategory(cleanDentrixText(doc.descript) || '')] += 1;
+  }
+  return counts;
+}
+
+/** Pred ack filename shares a claim / preauth id with a claim ack or EOB for the same patient. */
+export function predAckClearedByResponseDocument(
+  predAckDescript: string,
+  patientDocuments: Pick<DentrixDocumentDoc, 'descript'>[]
+): boolean {
+  const emptyContext: DocumentProcedureContext = {
+    procedureCodes: [],
+    codeTypes: [],
+    primaryCodeType: null,
+    insurancePlanId: null,
+  };
+  for (const doc of patientDocuments) {
+    const descript = cleanDentrixText(doc.descript) || '';
+    if (!isPredeterminationResponseDocument(descript)) continue;
+    if (documentsSharePredeterminationAssociation(emptyContext, emptyContext, predAckDescript, descript)) {
+      return true;
+    }
+  }
+  return false;
 }

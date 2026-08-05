@@ -31,6 +31,7 @@ import {
   ESTIMATE_ACTION_LABELS,
   filterProcedureContextByGroup,
   isSnoozed,
+  applyLedgerCoverageToContext,
   isEstimateFullyCovered,
   matchesEstimateAgeBucket,
   monthsSinceDate,
@@ -49,13 +50,18 @@ import { PatientProfileTrigger } from '../components/PatientProfileTrigger';
 import {
   buildDocIdToPatientIdMap,
   buildDocumentEstimateWorkItems,
+  classifyEstimateDocumentCategory,
   collectCodesCoveredByPredeterminationResponses,
+  countEstimateDocumentCategories,
+  ESTIMATE_DOCUMENT_CATEGORY_DEFS,
   filterEstimateCandidateDocuments,
   fetchEstimateDocuments,
   DEFAULT_ESTIMATE_AGE_BUCKET,
   ESTIMATE_AGE_BUCKET_OPTIONS,
+  isEstimateReceivedDocument,
   isPredApprovedDocumentStatus,
   isPredFollowUpDocumentStatus,
+  predAckClearedByResponseDocument,
   workflowStatusBadgeClass,
   workflowStatusLabel,
   type DentrixDocumentAttachmentDoc,
@@ -66,14 +72,14 @@ import { fetchAttachmentsForDocIds, fetchPatientsByPatientIds } from '../lib/doc
 import { appendTimestampedFollowUpNote } from '../lib/followUpNotes';
 import {
   buildNextApptLabelFromPatientInfo,
-  buildEstimateSentLabelFromAppointments,
+  fetchAppointmentsForPatientIds,
   fetchClaimsForPatientIds,
-  fetchEstimateSentAppointments,
   fetchFollowUpsForDocIds,
   fetchInsuredForPatientGuids,
   fetchPatientInfoByPatientIds,
   resolveEstimateSentDisplayLabel,
 } from '../lib/estimatePageData';
+import { resolveEstimateSentVisit } from '../lib/estimateSent';
 import {
   cleanDentrixText,
   isActiveDentrixPatient,
@@ -174,7 +180,7 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
   const [procedureCodes, setProcedureCodes] = useState<DentrixProcedureCodeDoc[]>([]);
   const [insuredRows, setInsuredRows] = useState<DentrixInsuredDoc[]>([]);
   const [insuranceClaims, setInsuranceClaims] = useState<DentrixInsuranceClaimDoc[]>([]);
-  const [appointments, setAppointments] = useState<DentrixAppointmentDoc[]>([]);
+  const [appointmentsByPatientId, setAppointmentsByPatientId] = useState<Map<number, DentrixAppointmentDoc[]>>(new Map());
   const [ledgerByPatientId, setLedgerByPatientId] = useState<Map<number, DentrixLedgerTransactionDoc[]>>(new Map());
   const [ledgerLoading, setLedgerLoading] = useState(false);
   const [coverageByPlanId, setCoverageByPlanId] = useState<Map<number, DentrixCoverageTableDoc[]>>(new Map());
@@ -202,20 +208,6 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
     window.setTimeout(() => {
       setSaveNotice((prev) => (prev?.id === id ? null : prev));
     }, 2500);
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    void fetchEstimateSentAppointments(db)
-      .then((rows) => {
-        if (!cancelled) setAppointments(rows);
-      })
-      .catch((err) => {
-        console.error('estimate-sent appointments fetch failed', err);
-      });
-    return () => {
-      cancelled = true;
-    };
   }, []);
 
   useEffect(() => {
@@ -389,6 +381,19 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
     [documents]
   );
 
+  const documentCategoryCounts = useMemo(() => countEstimateDocumentCategories(documents), [documents]);
+
+  const predAcksClearedByResponse = useMemo(() => {
+    let count = 0;
+    for (const item of documentWorkItems) {
+      if (classifyEstimateDocumentCategory(item.descript) !== 'pred_ack') continue;
+      if (predAckClearedByResponseDocument(item.descript, documentsByPatientId.get(item.patientId) ?? [])) {
+        count += 1;
+      }
+    }
+    return count;
+  }, [documentWorkItems, documentsByPatientId]);
+
   const isPageLoading = loading || (candidateDocumentCount > 0 && attachmentsLoading);
 
   const deferredWorkItems = useDeferredValue(documentWorkItems);
@@ -417,11 +422,6 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
     [patientInfoById]
   );
 
-  const estimateSentByPatientId = useMemo(
-    () => buildEstimateSentLabelFromAppointments(appointments),
-    [appointments]
-  );
-
   const openDocumentItem = (
     item: (typeof documentWorkItems)[0],
     followUps: Record<string, Record<string, unknown>> = followUpByDocId
@@ -443,6 +443,7 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
     const fu = followUps[d.followUpDocId];
     const patientLedger = ledgerByPatientId.get(Number(d.patientId)) ?? [];
     const patientClaims = claimsByPatientId.get(Number(d.patientId)) ?? [];
+    const patientAppointments = appointmentsByPatientId.get(Number(d.patientId)) ?? [];
     const buildProcedureContextForDocument = (descript: string, documentDate?: string | null) =>
       buildDocumentProcedureContext({
         descript,
@@ -454,17 +455,26 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
         procedureCodes,
         insuredByGuid,
         coverageByPlanId,
-        estimateSent: !!estimateSentByPatientId[d.patientId],
+        estimateSent: patientAppointments.length > 0 && patientLedger.length > 0,
       });
 
-    let fullContext = buildProcedureContextForDocument(d.descript, d.createdate);
+    let fullContext = applyLedgerCoverageToContext(
+      buildProcedureContextForDocument(d.descript, d.createdate),
+      patientLedger,
+      adaByProccodeId
+    );
 
     if (d.workflowStatus === 'needs_follow_up') {
       const coveredCodes = collectCodesCoveredByPredeterminationResponses({
         predAckDescript: d.descript,
         predAckContext: fullContext,
         patientDocuments: documentsByPatientId.get(d.patientId) ?? [],
-        resolveResponseContext: (descript) => buildProcedureContextForDocument(descript),
+        resolveResponseContext: (descript) =>
+          applyLedgerCoverageToContext(
+            buildProcedureContextForDocument(descript),
+            patientLedger,
+            adaByProccodeId
+          ),
       });
       if (coveredCodes.size) {
         const withoutCovered = excludeProcedureCodesFromContext(
@@ -473,7 +483,7 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
           coverageByPlanId
         );
         if (!withoutCovered) return null;
-        fullContext = withoutCovered;
+        fullContext = applyLedgerCoverageToContext(withoutCovered, patientLedger, adaByProccodeId);
       }
     }
 
@@ -491,13 +501,22 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
       adaByProccodeId
     );
 
+    const visitSent = resolveEstimateSentVisit({
+      documentDate: d.createdate,
+      procedureCodes: procedureContext.procedureCodes.map((c) => c.code),
+      preauthId: procedureContext.preauthId,
+      claimId: procedureContext.claimId,
+      ledgerRows: patientLedger,
+      appointments: patientAppointments,
+      adaByProccodeId,
+    });
     const estimateSentLabel = resolveEstimateSentDisplayLabel({
-      dentrixSentLabel: estimateSentByPatientId[d.patientId] ?? null,
-      estimateReceivedAt: fu?.estimateReceivedAt,
+      visitLabel: visitSent?.label ?? null,
+      estimateReceivedAt: fu?.estimateReceivedAt ?? (isEstimateReceivedDocument(d.descript) ? d.createdate : null),
       actionFlags: (fu?.actionFlags as DocumentEstimateRow['actionFlags']) ?? {},
       actionHistory: parseActionHistory(fu?.actionHistory ?? fu?.outreachHistory),
     });
-    if (isEstimateFullyCovered(procedureContext)) {
+    if (isEstimateFullyCovered(procedureContext, patientLedger, adaByProccodeId)) {
       return null;
     }
 
@@ -553,7 +572,7 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
     codeTypeFilter,
     ageBucket,
     adaByProccodeId,
-    estimateSentByPatientId,
+    appointmentsByPatientId,
   ]);
 
   const predFollowUpRows = useMemo<DocumentEstimateRow[]>(() => {
@@ -581,7 +600,7 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
     codeTypeFilter,
     ageBucket,
     adaByProccodeId,
-    estimateSentByPatientId,
+    appointmentsByPatientId,
     documentsByPatientId,
   ]);
 
@@ -667,6 +686,32 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
       cancelled = true;
     };
   }, [ledgerPatientIds, ledgerByPatientId]);
+
+  useEffect(() => {
+    const missing = ledgerPatientIds.filter((id) => !appointmentsByPatientId.has(Number(id)));
+    if (!missing.length) return;
+
+    let cancelled = false;
+    void fetchAppointmentsForPatientIds(
+      db,
+      missing.map((id) => Number(id))
+    )
+      .then((map) => {
+        if (cancelled) return;
+        setAppointmentsByPatientId((prev) => {
+          const next = new Map(prev);
+          map.forEach((rows, patid) => next.set(patid, rows));
+          return next;
+        });
+      })
+      .catch((err) => {
+        console.error('estimate appointment fetch failed', err);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [ledgerPatientIds, appointmentsByPatientId]);
 
   useEffect(() => {
     const planIds = [
@@ -1347,14 +1392,9 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
       <div className="border-b border-slate-100 pb-6">
         <h1 className="text-2xl md:text-3xl font-black text-slate-900 tracking-tight uppercase">Estimate follow-up</h1>
         <p className="text-[11px] font-bold text-slate-500 mt-2 max-w-3xl">
-          Document Center pre-determinations linked to patients. Procedure codes come from{' '}
-          <span className="text-slate-700">insurance_claims</span> (pre-determinations) when synced, otherwise from{' '}
-          <span className="text-slate-700">ledger_transactions</span> via pre-auth / claim id and treatment-planned
-          procedures. Document filenames still contribute parsed codes. Plan coverage loads from{' '}
-          <span className="text-slate-700">coverage_tables</span> per patient insurance.{' '}
-          <span className="text-slate-700">Explanation</span> and{' '}
-          <span className="text-slate-700">explanation of benefits</span> appear under pre-d approved;{' '}
-          <span className="text-slate-700">acknowledgment</span> documents appear under pre-d to follow up.
+          Predetermination and estimate paperwork from Document Center. The tabs are only open work — category counts
+          below show every loaded document type, including claim acknowledgments and explanation of benefits that are
+          not listed as their own rows.
         </p>
       </div>
 
@@ -1436,26 +1476,47 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
         </div>
       </div>
 
-      <p className="text-[10px] font-bold text-slate-500 -mt-4">
-        {ageBucketLabel}
-        {' · '}
-        <span className="text-slate-400">
-          {documents.length.toLocaleString()} document{documents.length === 1 ? '' : 's'} loaded (exclusive age buckets)
-        </span>
-        {' · '}
-        <span className="text-slate-400">
-          {isPageLoading ? (
-            <span className="inline-flex items-center gap-1.5">
-              <Loader2 className="h-3 w-3 animate-spin" />
-              Loading open counts…
+      <div className="rounded-lg border border-slate-200 bg-slate-50/70 p-4 space-y-3 -mt-2">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Document categories</p>
+          <p className="text-[10px] font-bold text-slate-400">
+            {documents.length.toLocaleString()} loaded · treatment age: {ageBucketLabel}
+          </p>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2">
+          {ESTIMATE_DOCUMENT_CATEGORY_DEFS.map((cat) => (
+            <div key={cat.id} className="rounded-md border border-slate-200 bg-white px-3 py-2">
+              <div className="flex items-baseline justify-between gap-2">
+                <p className="text-[11px] font-bold text-slate-800 leading-snug">{cat.label}</p>
+                <p className="text-sm font-black tabular-nums text-slate-900">
+                  {isPageLoading && documents.length === 0 ? '—' : documentCategoryCounts[cat.id].toLocaleString()}
+                </p>
+              </div>
+              <p className="text-[10px] text-slate-500 mt-0.5">{cat.hint}</p>
+            </div>
+          ))}
+        </div>
+        <div className="flex flex-wrap gap-2 pt-1">
+          <span className="inline-flex items-center gap-1.5 rounded-md border border-teal-200 bg-teal-50 px-2.5 py-1 text-[10px] font-bold text-teal-900">
+            Open on pre-d approved
+            <span className="tabular-nums font-black">
+              {isPageLoading ? '…' : predApprovedRows.length.toLocaleString()}
             </span>
-          ) : (
-            <>
-              {predApprovedRows.length} open on pre-d approved tab · {predFollowUpRows.length} open on acknowledgment tab
-            </>
-          )}
-        </span>
-      </p>
+          </span>
+          <span className="inline-flex items-center gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1 text-[10px] font-bold text-amber-950">
+            Open on acknowledgment
+            <span className="tabular-nums font-black">
+              {isPageLoading ? '…' : predFollowUpRows.length.toLocaleString()}
+            </span>
+          </span>
+          <span className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[10px] font-bold text-slate-700">
+            Pred acks closed by claim ack / EOB
+            <span className="tabular-nums font-black">
+              {isPageLoading ? '…' : predAcksClearedByResponse.toLocaleString()}
+            </span>
+          </span>
+        </div>
+      </div>
 
       {documentsLoadError ? (
         <div className="rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">

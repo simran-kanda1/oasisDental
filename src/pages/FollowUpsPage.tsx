@@ -14,7 +14,7 @@ import { FOLLOW_UP_QUEUE_RECALL, isRecallFollowUpDoc } from '../lib/followUpQueu
 import { LogOutreachModal, type OutreachLogPayload } from '../components/LogOutreachModal';
 import { PatientProfileTrigger } from '../components/PatientProfileTrigger';
 import { getNotRebookedReasonOptionsForQueue, queueReasonRemovalPatch, queueReasonRemovesFromList } from '../lib/notRebookedReasons';
-import { NO_APPT_BOOKED_QUEUE_ID } from '../data/queueRules';
+import { NO_APPT_BOOKED_QUEUE_DEF, NO_APPT_BOOKED_QUEUE_ID } from '../data/queueRules';
 import { UserX } from 'lucide-react';
 import { useFrontDeskData } from '../contexts/FrontDeskDataContext';
 import { APPOINTMENTS_QUERY_LIMIT } from '../lib/appointmentsQuery';
@@ -432,67 +432,43 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
     const selectedForBooking = items.find((x) => x.patientId === bookingId);
 
     return (
-        <div
-            className={
-                embedded
-                    ? 'space-y-8 max-w-full font-sans'
-                    : 'p-8 space-y-12 max-w-full mx-auto bg-white font-sans pb-20'
-            }
-        >
-            <div
-                className={
-                    embedded
-                        ? 'flex flex-col md:flex-row items-center justify-between gap-4 border-b pb-4 border-slate-100'
-                        : 'flex flex-col md:flex-row items-center justify-between gap-6 border-b pb-8 border-slate-100 px-2'
-                }
-            >
+        <div className={embedded ? 'space-y-4 max-w-full font-sans' : 'p-8 space-y-6 max-w-full mx-auto bg-white font-sans pb-20'}>
+            <div className="mb-4 flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
                 <div>
-                    {embedded ? (
-                        <>
-                            <p className="text-[9px] font-black text-teal-600 uppercase tracking-widest">No appt booked</p>
-                            <p className="text-[11px] font-bold text-slate-500 mt-1">
-                                {items.length} active patients with missed visits and no next appointment
-                            </p>
-                        </>
-                    ) : (
-                        <>
-                            <h1 className="text-3xl font-black text-slate-900 tracking-tighter uppercase leading-none">
-                                No follow up appt booked
-                            </h1>
-                            <p className="text-[10px] font-black text-slate-300 uppercase tracking-[0.2em] mt-2">
-                                {items.length} active patients with missed visits and no next appointment
-                            </p>
-                        </>
-                    )}
+                    <h1 className="text-xl font-black text-slate-900 uppercase tracking-tight">
+                        {NO_APPT_BOOKED_QUEUE_DEF.label}
+                    </h1>
+                    <p className="text-[11px] text-slate-500 mt-1 max-w-3xl">
+                        {NO_APPT_BOOKED_QUEUE_DEF.description}
+                    </p>
+                    <p className="text-[10px] font-bold text-slate-400 mt-1">
+                        {filtered.length} patients · {items.length} unfiltered
+                    </p>
                 </div>
-                <div className="relative w-full md:max-w-xs transition-all">
+                <div className="relative w-full md:max-w-xs">
                     <Input
-                        placeholder="Search Patient / ID / Reason..."
+                        placeholder="Search patient / ID / reason…"
                         value={search}
                         onChange={e => setSearch(e.target.value)}
-                        className={
-                            embedded
-                                ? 'h-10 text-xs font-bold border-slate-200'
-                                : 'pl-6 h-12 bg-slate-50 border-slate-100 rounded-2xl text-[11px] font-black uppercase tracking-tight placeholder:text-slate-200 focus:bg-white focus:ring-teal-500/10 focus:border-teal-500 transition-all shadow-sm'
-                        }
+                        className="h-9 text-xs font-bold border-slate-200 rounded-md"
                     />
                 </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-                <select value={providerFilter} onChange={(e) => setProviderFilter(e.target.value)} className="h-11 px-4 rounded-xl border border-slate-100 bg-white text-[10px] font-black uppercase tracking-widest">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-2 mb-3">
+                <select value={providerFilter} onChange={(e) => setProviderFilter(e.target.value)} className="h-9 px-3 rounded-md border border-slate-200 bg-white text-[10px] font-bold uppercase tracking-widest text-slate-600">
                     <option value="all">All Providers</option>
                     {providerOptions.map((provider) => (
                         <option key={provider} value={provider}>{provider}</option>
                     ))}
                 </select>
-                <select value={String(minMissedFilter)} onChange={(e) => setMinMissedFilter(Number(e.target.value))} className="h-11 px-4 rounded-xl border border-slate-100 bg-white text-[10px] font-black uppercase tracking-widest">
+                <select value={String(minMissedFilter)} onChange={(e) => setMinMissedFilter(Number(e.target.value))} className="h-9 px-3 rounded-md border border-slate-200 bg-white text-[10px] font-bold uppercase tracking-widest text-slate-600">
                     <option value="1">1+ Missed</option>
                     <option value="2">2+ Missed</option>
                     <option value="3">3+ Missed</option>
                     <option value="4">4+ Missed</option>
                 </select>
-                <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as 'open' | 'booked' | 'all')} className="h-11 px-4 rounded-xl border border-slate-100 bg-white text-[10px] font-black uppercase tracking-widest">
+                <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as 'open' | 'booked' | 'all')} className="h-9 px-3 rounded-md border border-slate-200 bg-white text-[10px] font-bold uppercase tracking-widest text-slate-600">
                     <option value="open">Open</option>
                     <option value="booked">Booked</option>
                     <option value="all">All</option>
@@ -505,66 +481,61 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
                         setStatusFilter('open');
                         setSearch('');
                     }}
-                    className="h-11 rounded-xl border border-slate-100 text-[10px] font-black uppercase tracking-widest"
+                    className="h-9 rounded-md border border-slate-200 text-[10px] font-bold uppercase tracking-widest text-slate-600"
                 >
                     Reset Filters
                 </Button>
             </div>
 
             {loading ? (
-                <div className="p-40 text-center uppercase text-[10px] font-black opacity-10 tracking-[0.3em]">Syncing...</div>
+                <div className="p-16 text-center uppercase text-[10px] font-black text-slate-300 tracking-widest">Syncing...</div>
             ) : (
-                <div className="bg-white border border-slate-100 rounded-[2.5rem] shadow-sm overflow-hidden min-h-[500px]">
-                    <div className="overflow-x-auto max-h-[calc(100vh-18rem)] overflow-y-auto">
-                        <table className="w-full text-left border-collapse min-w-[1280px]">
+                <div className="border border-slate-200 rounded-lg overflow-hidden overflow-x-auto max-h-[calc(100vh-16rem)] overflow-y-auto bg-white">
+                    <table className="w-full text-left text-sm min-w-[1100px]">
                             <thead className="sticky top-0 z-10 bg-slate-50">
-                                <tr className="border-b border-slate-100/50">
-                                    <th className="p-6 text-[10px] font-black text-slate-300 uppercase tracking-[0.2em] w-12 pl-6">
+                                <tr className="bg-slate-50 border-b border-slate-200 text-[10px] font-black uppercase tracking-widest text-slate-500">
+                                    <th className="p-3 pl-4 w-12">
                                         <span className="sr-only">Remove</span>
                                     </th>
-                                    <th className="p-6 text-[10px] font-black text-slate-300 uppercase tracking-[0.2em] pl-4">
+                                    <th className="p-3">
                                         Patient
-                                        <span className="block font-normal normal-case text-[9px] text-slate-400 tracking-normal mt-1">
-                                            Tap name for contact card
+                                        <span className="block font-normal normal-case text-[9px] text-slate-400 tracking-normal mt-0.5">
+                                            Tap row name for phone and notes
                                         </span>
                                     </th>
-                                    <th className="p-6 text-[10px] font-black text-slate-300 uppercase tracking-[0.2em] min-w-[140px]">
-                                        Why not rebooked
-                                    </th>
-                                    <th className="p-6 text-[10px] font-black text-slate-300 uppercase tracking-[0.2em]">Last Appointment</th>
-                                    <th className="p-6 text-[10px] font-black text-slate-300 uppercase tracking-[0.2em]">Outreach</th>
-                                    <th className="p-6 text-[10px] font-black text-slate-300 uppercase tracking-[0.2em]">Notes / Outcome</th>
-                                    <th className="p-6 text-[10px] font-black text-slate-300 uppercase tracking-[0.2em] pr-10 text-right">Booking</th>
+                                    <th className="p-3 min-w-[140px]">Why not rebooked</th>
+                                    <th className="p-3">Last appointment</th>
+                                    <th className="p-3">Outreach</th>
+                                    <th className="p-3 pr-4 min-w-[200px]">Notes</th>
+                                    <th className="p-3 pr-4 min-w-[148px]">Actions</th>
                                 </tr>
                             </thead>
-                            <tbody className="divide-y divide-slate-50">
+                            <tbody className="divide-y divide-slate-100">
                                 {filtered.map((item) => (
-                                    <tr key={item.patientId} className="hover:bg-slate-50/50 transition-colors group">
-                                        <td className="p-6 pl-6 align-top">
+                                    <tr key={item.patientId} className="hover:bg-slate-50/80 align-top">
+                                        <td className="p-3 pl-4">
                                             <button
                                                 type="button"
                                                 title="Remove from list"
                                                 aria-label={`Remove ${item.patientName} from list`}
                                                 disabled={!!updatingId}
                                                 onClick={() => void removeFromList(item)}
-                                                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-rose-200 text-rose-600 hover:bg-rose-50 disabled:opacity-40"
+                                                className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-rose-200 text-rose-600 hover:bg-rose-50 disabled:opacity-40"
                                             >
                                                 <UserX className="h-4 w-4" />
                                             </button>
                                         </td>
-                                        <td className="p-6 pl-4">
-                                            <PatientProfileTrigger patientId={item.patientId}>
-                                                <div className="text-xs font-black text-slate-900 uppercase tracking-tighter truncate leading-none">
-                                                    {item.patientName}
-                                                </div>
-                                                <div className="text-[9px] font-black text-slate-300 uppercase tracking-widest mt-1.5 opacity-60 leading-none pointer-events-none">
-                                                    ID {item.patientId} • {item.phone}
-                                                </div>
+                                        <td className="p-3 font-bold text-slate-900">
+                                            <PatientProfileTrigger patientId={item.patientId} className="font-bold">
+                                                {item.patientName}
                                             </PatientProfileTrigger>
+                                            <p className="text-[9px] text-slate-400 font-bold mt-0.5">
+                                                ID {item.patientId} · {item.phone} · {item.missedAppointments} missed
+                                            </p>
                                         </td>
-                                        <td className="p-6">
+                                        <td className="p-3">
                                             <select
-                                                className="w-full max-w-[160px] h-9 rounded-xl border border-slate-100 text-[9px] font-black uppercase bg-white disabled:opacity-40"
+                                                className="w-full max-w-[160px] h-9 rounded-md border border-slate-200 text-[10px] font-bold uppercase bg-white disabled:opacity-40"
                                                 disabled={!!updatingId || !!item.tracking?.nextAppointmentBooked}
                                                 value={item.tracking?.notRebookedReason ?? ''}
                                                 onChange={(e) => {
@@ -584,36 +555,36 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
                                             </select>
                                             {item.tracking?.notRebookedReason &&
                                             (item.tracking.notRebookedReasonAt || item.tracking.lastChanged) ? (
-                                                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-1.5 tabular-nums">
+                                                <p className="text-[9px] text-slate-400 font-bold mt-1 tabular-nums">
                                                     Updated{' '}
                                                     {format(
                                                         new Date(
                                                             item.tracking.notRebookedReasonAt ??
                                                                 item.tracking.lastChanged!
                                                         ),
-                                                        'MMM d, h:mm a'
+                                                        'MMM d, yyyy h:mm a'
                                                     )}
                                                 </p>
                                             ) : null}
                                         </td>
-                                        <td className="p-6">
-                                            <p className="text-[11px] font-black text-slate-800 uppercase tracking-tight leading-none">{item.latestReason}</p>
-                                            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-2 opacity-70">
-                                                {item.latestAppointmentDate ?? 'N/A'} {item.latestAppointmentTime} • {item.latestProvider}
+                                        <td className="p-3 text-slate-600 text-xs">
+                                            <p>{item.latestReason}</p>
+                                            <p className="text-[9px] text-slate-400 font-bold mt-0.5">
+                                                {item.latestAppointmentDate ?? '—'} {item.latestAppointmentTime} · {item.latestProvider}
                                             </p>
                                         </td>
-                                        <td className="p-6">
+                                        <td className="p-3">
                                             <Button
                                                 size="sm"
                                                 variant="outline"
                                                 disabled={!!updatingId}
                                                 onClick={() => setLogModalItem(item)}
-                                                className="h-9 px-4 text-[9px] font-black uppercase tracking-widest rounded-xl border-slate-200"
+                                                className="h-8 text-[9px] font-black uppercase border-teal-300 text-teal-800 hover:bg-teal-50 whitespace-nowrap"
                                             >
                                                 Log follow-up
                                             </Button>
                                         </td>
-                                        <td className="p-6">
+                                        <td className="p-3 pr-4">
                                             <div className="max-w-[320px]">
                                                 <button
                                                     onClick={() => {
@@ -622,34 +593,35 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
                                                     }}
                                                     className="text-left w-full"
                                                 >
-                                                    <p className="text-[11px] font-bold text-slate-600 uppercase tracking-tight leading-relaxed">
+                                                    <p className="text-[11px] font-bold text-slate-600 leading-relaxed">
                                                         {item.tracking?.notes ? latestNotePreview(item.tracking.notes, 120) : 'Add internal note'}
                                                     </p>
                                                     {item.tracking?.lastNoteAt && (
-                                                        <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-1">
-                                                            Last note {format(new Date(item.tracking.lastNoteAt), 'MMM d, h:mm a')}
+                                                        <p className="text-[9px] text-slate-400 font-bold mt-1">
+                                                            Last note {format(new Date(item.tracking.lastNoteAt), 'MMM d, yyyy h:mm a')}
                                                         </p>
                                                     )}
                                                 </button>
-                                                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-2">
+                                                <p className="text-[9px] text-slate-400 font-bold mt-1">
                                                     {item.tracking?.outcome || 'No outcome yet'}
                                                 </p>
                                             </div>
                                         </td>
-                                        <td className="p-6 pr-10 text-right">
+                                        <td className="p-3 pr-4 align-top">
                                             <Button
+                                                type="button"
                                                 size="sm"
+                                                variant="outline"
                                                 onClick={() => setBookingId(item.patientId)}
-                                                className="h-8 px-4 bg-slate-900 hover:bg-slate-800 text-white text-[9px] font-black uppercase tracking-widest rounded-xl"
+                                                className="h-8 w-full text-[9px] font-black uppercase border-slate-200 text-slate-700 hover:bg-slate-50 whitespace-nowrap"
                                             >
-                                                Set Next Appt
+                                                Set next appt
                                             </Button>
                                         </td>
                                     </tr>
                                 ))}
                             </tbody>
                         </table>
-                    </div>
                 </div>
             )}
 

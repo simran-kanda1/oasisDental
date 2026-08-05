@@ -215,8 +215,106 @@ function coveragePercent(value: unknown): number | null {
   return null;
 }
 
-/** Hide only when every known code type is fully covered (100%). Unknown coverage stays visible. */
-export function isEstimateFullyCovered(ctx: DocumentProcedureContext): boolean {
+/** Insurance paid ÷ fee on a ledger line. Null when fee or payment has not posted. */
+export function coveragePercentFromLedgerAmounts(
+  charge: unknown,
+  primaryPaid: unknown,
+  secondaryPaid: unknown = 0
+): number | null {
+  const amt = Number(charge);
+  if (!Number.isFinite(amt) || amt <= 0) return null;
+  const paid = (Number(primaryPaid) || 0) + (Number(secondaryPaid) || 0);
+  if (paid <= 0) return null;
+  return (paid / amt) * 100;
+}
+
+function ledgerCoveragePercentsForCode(
+  code: ResolvedProcedureCode,
+  ctx: DocumentProcedureContext,
+  ledgerRows: DentrixLedgerTransactionDoc[],
+  adaByProccodeId: Map<number, string>
+): number[] {
+  const linked: number[] = [];
+  const matching: number[] = [];
+
+  for (const row of ledgerRows) {
+    if (adaByProccodeId.get(Number(row.proccodeid)) !== code.code) continue;
+    const pct = coveragePercentFromLedgerAmounts(row.amt, row.amtpriminspaid, row.amtsecinspaid);
+    if (pct == null) continue;
+    matching.push(pct);
+    if (ctx.preauthId && Number(row.preauthid) === ctx.preauthId) linked.push(pct);
+    else if (ctx.claimId && Number(row.claimid) === ctx.claimId) linked.push(pct);
+  }
+
+  if (linked.length) return linked;
+  if (matching.length) return matching;
+
+  const fromCode = coveragePercentFromLedgerAmounts(
+    code.chargeAmount,
+    code.primaryInsurancePortion,
+    code.secondaryInsurancePortion
+  );
+  return fromCode == null ? [] : [fromCode];
+}
+
+export function applyLedgerCoverageToContext(
+  ctx: DocumentProcedureContext,
+  ledgerRows: DentrixLedgerTransactionDoc[],
+  adaByProccodeId: Map<number, string>
+): DocumentProcedureContext {
+  const procedureCodes = ctx.procedureCodes.map((code) => {
+    const matchingRows = ledgerRows.filter((row) => adaByProccodeId.get(Number(row.proccodeid)) === code.code);
+    const preferred =
+      matchingRows.find((row) => ctx.preauthId && Number(row.preauthid) === ctx.preauthId) ??
+      matchingRows.find((row) => ctx.claimId && Number(row.claimid) === ctx.claimId) ??
+      matchingRows.find((row) => (Number(row.amtpriminspaid) || 0) + (Number(row.amtsecinspaid) || 0) > 0) ??
+      null;
+    if (!preferred) return code;
+    return {
+      ...code,
+      chargeAmount: Number(preferred.amt) || code.chargeAmount,
+      primaryInsurancePortion: Number(preferred.amtpriminspaid) || 0,
+      secondaryInsurancePortion: Number(preferred.amtsecinspaid) || 0,
+    };
+  });
+
+  const coveredCtx = { ...ctx, procedureCodes };
+  const codeTypes = ctx.codeTypes.map((type) => {
+    const typeCodes = procedureCodes.filter((code) => {
+      const group = matchEstimateCodeTypeGroup(code.code);
+      if (group) return group.id === type.groupId;
+      return type.groupId === 'other' || type.groupId.startsWith('cov-');
+    });
+    const pool = typeCodes.length ? typeCodes : procedureCodes;
+    const pcts = pool.flatMap((code) =>
+      ledgerCoveragePercentsForCode(code, coveredCtx, ledgerRows, adaByProccodeId)
+    );
+    return {
+      ...type,
+      percentCov: pcts.length ? Math.round(Math.min(...pcts)) : undefined,
+    };
+  });
+
+  const primaryCodeType = ctx.primaryCodeType
+    ? (codeTypes.find((t) => t.groupId === ctx.primaryCodeType!.groupId) ?? null)
+    : (codeTypes[0] ?? null);
+
+  return { ...coveredCtx, codeTypes, primaryCodeType };
+}
+
+/** Hide only when every tracked ledger procedure is fully covered (100%). Unknown stays visible. */
+export function isEstimateFullyCovered(
+  ctx: DocumentProcedureContext,
+  ledgerRows: DentrixLedgerTransactionDoc[] = [],
+  adaByProccodeId: Map<number, string> = new Map()
+): boolean {
+  if (ctx.procedureCodes.length) {
+    return ctx.procedureCodes.every((code) => {
+      const pcts = ledgerCoveragePercentsForCode(code, ctx, ledgerRows, adaByProccodeId);
+      return pcts.length > 0 && pcts.every((pct) => pct >= 99.5);
+    });
+  }
+
   const types = ctx.codeTypes.length
     ? ctx.codeTypes
     : ctx.primaryCodeType
@@ -241,17 +339,21 @@ export function shouldHideEstimateOnLedgerComplete(
   return isEstimateFullyCovered(ctx);
 }
 
-/** Whether an estimate row should be removed based on 100% plan coverage. */
+/** Whether an estimate row should be removed based on 100% ledger coverage. */
 export function isEstimateCompleteOnLedger(
   ctx: DocumentProcedureContext,
   groupId: string,
-  _ledgerRows: DentrixLedgerTransactionDoc[],
-  _adaByProccodeId: Map<number, string>,
+  ledgerRows: DentrixLedgerTransactionDoc[],
+  adaByProccodeId: Map<number, string>,
   _documentDate: Date | null,
   _treatmentDateSource: 'ledger' | 'document',
   _options?: { documentStatus?: 'book_right_away' | 'covered_eob' | 'needs_follow_up' | 'unclassified' }
 ): boolean {
-  return isEstimateFullyCovered(filterProcedureContextByGroup(ctx, groupId));
+  return isEstimateFullyCovered(
+    filterProcedureContextByGroup(ctx, groupId),
+    ledgerRows,
+    adaByProccodeId
+  );
 }
 
 /** True when tracked codes are completed in the ledger on or after the document date. */

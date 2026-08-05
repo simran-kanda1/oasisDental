@@ -81,6 +81,7 @@ export interface ResolvedProcedureCode {
   code: string;
   description: string | null;
   primaryInsurancePortion?: number | null;
+  secondaryInsurancePortion?: number | null;
   writeOff?: number | null;
   chargeAmount?: number | null;
 }
@@ -272,8 +273,17 @@ export function formatProcedureCodesSummary(codes: ResolvedProcedureCode[]): str
     .map((c) => {
       const base = c.description ? `${c.code} — ${c.description}` : c.code;
       const fin: string[] = [];
-      if (typeof c.primaryInsurancePortion === 'number' && c.primaryInsurancePortion > 0) {
-        fin.push(`ins $${c.primaryInsurancePortion.toFixed(2)}`);
+      if (typeof c.chargeAmount === 'number' && c.chargeAmount > 0) {
+        fin.push(`fee $${c.chargeAmount.toFixed(2)}`);
+      }
+      const insPaid =
+        (typeof c.primaryInsurancePortion === 'number' ? c.primaryInsurancePortion : 0) +
+        (typeof c.secondaryInsurancePortion === 'number' ? c.secondaryInsurancePortion : 0);
+      if (insPaid > 0) {
+        fin.push(`ins $${insPaid.toFixed(2)}`);
+      }
+      if (typeof c.chargeAmount === 'number' && c.chargeAmount > 0 && insPaid > 0) {
+        fin.push(`${Math.round((insPaid / c.chargeAmount) * 100)}% cov`);
       }
       if (typeof c.writeOff === 'number' && c.writeOff > 0) {
         fin.push(`write-off $${c.writeOff.toFixed(2)}`);
@@ -318,6 +328,8 @@ function resolveCodesFromLedgerLines(
     financial.set(ada, {
       primaryInsurancePortion:
         line.primaryInsurancePaid ?? prev.primaryInsurancePortion ?? null,
+      secondaryInsurancePortion:
+        line.secondaryInsurancePaid ?? prev.secondaryInsurancePortion ?? null,
       chargeAmount: line.amt ?? prev.chargeAmount ?? null,
     });
   }
@@ -573,6 +585,7 @@ function resolveTreatmentPlannedLedgerCodes(
       procdate: String(row.procdate ?? row.entrydate ?? ''),
       amt: Number(row.amt ?? 0),
       primaryInsurancePaid: Number(row.amtpriminspaid ?? 0) || undefined,
+      secondaryInsurancePaid: Number(row.amtsecinspaid ?? 0) || undefined,
     })),
     adaByProccodeId,
     adaIndex

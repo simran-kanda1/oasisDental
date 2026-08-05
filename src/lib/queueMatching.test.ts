@@ -518,7 +518,7 @@ describe('recall interval queue filtering', () => {
     expect(rows[0].detail).toBe('4M prophy');
   });
 
-  it('does not list GA from appointment text without completed ledger code', () => {
+  it('lists past GA from appointment text until completed in ledger', () => {
     const appts: DentrixAppointmentDoc[] = [
       {
         id: 'ga1',
@@ -529,7 +529,40 @@ describe('recall interval queue filtering', () => {
       },
     ];
     const rows = buildQueueRows(GA_ALL_APPOINTMENTS_QUEUE_ID, appts, patientsById, 0, now, 'all', 'all', {});
-    expect(rows).toHaveLength(0);
+    expect(rows).toHaveLength(1);
+  });
+
+  it('keeps upcoming GA when only treatment-planned GA is in the ledger', () => {
+    const procedureCodes = [{ id: '1', proccodeid: 922, adacode: '92222', descript: 'GA' }];
+    const appts: DentrixAppointmentDoc[] = [
+      {
+        id: 'ga-future',
+        patient_id: 1,
+        patient_name: 'Test Patient',
+        appointment_date: '2026-08-01T10:00:00Z',
+        reason: 'GA extraction',
+      },
+    ];
+    const ledgerByPatientId = new Map<number, import('./ledgerTransactions').DentrixLedgerTransactionDoc[]>([
+      [
+        1,
+        [
+          {
+            id: 'l-planned',
+            patid: 1,
+            proccodeid: 922,
+            procdate: '2026-08-01T10:00:00Z',
+            chartstatus: 105,
+          },
+        ],
+      ],
+    ]);
+    const rows = buildQueueRows(GA_ALL_APPOINTMENTS_QUEUE_ID, appts, patientsById, 0, now, 'all', 'all', {
+      procedureCodes,
+      ledgerByPatientId,
+      gaTimeFilter: 'upcoming_4mo',
+    });
+    expect(rows).toHaveLength(1);
   });
 
   it('removes GA row when completed GA code is already posted in ledger', () => {
@@ -1352,6 +1385,23 @@ describe('emerg_follow_up queue', () => {
     expect(rows).toHaveLength(1);
   });
 
+  it('matches EMG / E/V types even when production type looks like continuing care', () => {
+    const appts: DentrixAppointmentDoc[] = [
+      {
+        id: 'emg',
+        patient_id: 1,
+        patient_name: 'Pat One',
+        appointment_date: '2026-05-20T10:00:00',
+        appointment_type: 'EMG',
+        reason: 'Toothache',
+        production_type_desc: '6mo Continuing care',
+      } as DentrixAppointmentDoc,
+    ];
+
+    const rows = buildQueueRows('emerg_follow_up', appts, patientsById, 0, now, 'all', 'all', {});
+    expect(rows).toHaveLength(1);
+  });
+
   it('hides emergency visits older than 6 weeks', () => {
     const appts: DentrixAppointmentDoc[] = [
       {
@@ -1432,14 +1482,14 @@ describe('no shows past week queue', () => {
     expect(rows.every((r) => r.rebooked === false)).toBe(true);
   });
 
-  it('does not list appointments without ledger no-show codes', () => {
+  it('lists appointment no-shows when ledger NC codes are missing', () => {
     const appts: DentrixAppointmentDoc[] = [
       {
-        id: 'false-positive',
+        id: 'status-no-show',
         patient_id: 100,
         patient_name: 'Joshi Patient',
         appointment_date: '2026-06-20T14:00:00Z',
-        reason: 'no show',
+        reason: 'Cleaning',
         status_id: 3,
       },
     ];
@@ -1449,7 +1499,32 @@ describe('no shows past week queue', () => {
       ledgerByPatientId: new Map(),
     });
 
-    expect(rows).toHaveLength(0);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].patientName).toBe('Joshi Patient');
+  });
+
+  it('lists ledger no-shows that are not chartstatus 102', () => {
+    const ledgerByPatientId = new Map<number, import('./ledgerTransactions').DentrixLedgerTransactionDoc[]>([
+      [
+        100,
+        [
+          {
+            id: 'l-joshi',
+            patid: 100,
+            proccodeid: 9020,
+            procdate: '2026-06-20T14:00:00Z',
+            chartstatus: 105,
+          },
+        ],
+      ],
+    ]);
+
+    const rows = buildQueueRows('no_shows_past_week', [], patientsById, 0, now, 'all', 'all', {
+      procedureCodes: noShowProcedureCodes,
+      ledgerByPatientId,
+    });
+
+    expect(rows).toHaveLength(1);
   });
 
   it('marks rebooked only when an active future appointment exists after the no-show', () => {

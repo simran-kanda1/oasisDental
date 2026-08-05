@@ -25,5 +25,15 @@ export function ledgerRowIndicatesNoShow(
   row: DentrixLedgerTransactionDoc,
   adaByProccodeId: Map<number, string>
 ): boolean {
-  return isNoShowLedgerAdaCode(resolveLedgerRowAdaCode(row, adaByProccodeId));
+  if (isNoShowLedgerAdaCode(resolveLedgerRowAdaCode(row, adaByProccodeId))) return true;
+  const extra = row as DentrixLedgerTransactionDoc & {
+    descript?: string;
+    description?: string;
+    note?: string;
+    notes?: string;
+  };
+  const text = [extra.descript, extra.description, extra.note, extra.notes, extra.adacode]
+    .filter(Boolean)
+    .join(' ');
+  return /\b(no[\s-]?show|oasis[\s-]?cancel(?:led|ed)?)\b/i.test(text);
 }
