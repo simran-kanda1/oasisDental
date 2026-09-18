@@ -7,9 +7,12 @@ import { Input } from '../components/ui/input';
 import { useAuth } from '../contexts/AuthContext';
 import {
     logActivity,
+    logStaffActivity,
+    staffActorFromAuth,
     ACTIVITY_SECTION_RECALL_QUEUE,
     buildOutreachActivityDetail,
 } from '../lib/activityLogger';
+import { logStaffAudit } from '../lib/auditTrail';
 import { FOLLOW_UP_QUEUE_RECALL, isRecallFollowUpDoc } from '../lib/followUpQueues';
 import { LogOutreachModal, type OutreachLogPayload } from '../components/LogOutreachModal';
 import { PatientProfileTrigger } from '../components/PatientProfileTrigger';
@@ -98,6 +101,7 @@ export interface FollowUpsPageProps {
 
 const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
     const { user, userProfile } = useAuth();
+    const staffActor = staffActorFromAuth(user, userProfile?.displayName);
     const frontDeskData = useFrontDeskData();
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState('');
@@ -283,7 +287,8 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
 
     const upsertTracking = async (
         item: DentrixFollowUpWorkItem & { trackingId: string; tracking?: FollowUpTrackingDoc },
-        patch: Partial<FollowUpTrackingDoc>
+        patch: Partial<FollowUpTrackingDoc>,
+        activityAction?: string
     ) => {
         const payload = {
             patient_id: Number(item.patientId),
@@ -304,6 +309,20 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
             } as FollowUpTrackingDoc,
         }));
         void setDoc(doc(db, 'followUps', item.trackingId), payload, { merge: true });
+
+        if (activityAction) {
+            void logStaffActivity(staffActor, {
+                action: activityAction,
+                section: ACTIVITY_SECTION_RECALL_QUEUE,
+                detail: JSON.stringify({ patientId: item.patientId, trackingId: item.trackingId }),
+            });
+            void logStaffAudit(staffActor, {
+                entityType: 'followUp',
+                entityId: item.trackingId,
+                action: activityAction,
+                detail: `${item.patientName} · patient ${item.patientId}`,
+            });
+        }
     };
 
     const saveOutreachLog = async (
@@ -390,7 +409,7 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
         await upsertTracking(item, {
             ...appendTimestampedFollowUpNote(item.tracking?.notes, noteDraft, author),
             status: item.tracking?.status ?? 'not_contacted',
-        });
+        }, `Saved note: ${item.patientName}`);
         setUpdatingId(null);
         setActiveNoteId(null);
         setNoteDraft('');
@@ -405,7 +424,7 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
         await upsertTracking(item, {
             removedFromList: true,
             removedAt: new Date().toISOString(),
-        });
+        }, `Removed from list: ${item.patientName}`);
         setUpdatingId(null);
     };
 
@@ -499,8 +518,9 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
                                                 aria-label={`Remove ${item.patientName} from list`}
                                                 disabled={!!updatingId}
                                                 onClick={() => void removeFromList(item)}
-                                                className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-rose-200 text-rose-600 hover:bg-rose-50 disabled:opacity-40"
+                                                className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-rose-200 text-rose-600 hover:bg-rose-50 disabled:opacity-40 text-base font-bold leading-none"
                                             >
+                                                ×
                                             </button>
                                         </td>
                                         <td className="p-3 font-bold text-slate-900">
@@ -518,11 +538,15 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
                                                 value={item.tracking?.notRebookedReason ?? ''}
                                                 onChange={(e) => {
                                                     const value = e.target.value;
-                                                    void upsertTracking(item, {
-                                                        notRebookedReason: value || undefined,
-                                                        notRebookedReasonAt: value ? new Date().toISOString() : undefined,
-                                                        ...queueReasonRemovalPatch(NO_APPT_BOOKED_QUEUE_ID, value),
-                                                    });
+                                                    void upsertTracking(
+                                                        item,
+                                                        {
+                                                            notRebookedReason: value || undefined,
+                                                            notRebookedReasonAt: value ? new Date().toISOString() : undefined,
+                                                            ...queueReasonRemovalPatch(NO_APPT_BOOKED_QUEUE_ID, value),
+                                                        },
+                                                        `Why not rebooked → ${value || 'cleared'}: ${item.patientName}`
+                                                    );
                                                 }}
                                             >
                                                 {recallReasonOptions.map((o) => (

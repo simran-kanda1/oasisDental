@@ -166,13 +166,13 @@ const AdminPortalPage: React.FC = () => {
     }, []);
 
     useEffect(() => {
-        const q = query(collection(db, 'activityLogs'), orderBy('timestamp', 'desc'));
+        const q = query(collection(db, 'activityLogs'), orderBy('timestamp', 'desc'), limit(200));
         const unsub = onSnapshot(q, snap => setLogs(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
         return unsub;
     }, []);
 
     useEffect(() => {
-        const q = query(collection(db, 'auditLogs'), orderBy('timestamp', 'desc'), limit(80));
+        const q = query(collection(db, 'auditLogs'), orderBy('timestamp', 'desc'), limit(200));
         const unsub = onSnapshot(q, (snap) => setAuditLogs(snap.docs.map((d) => ({ id: d.id, ...d.data() }))));
         return unsub;
     }, []);
@@ -750,17 +750,28 @@ const AdminPortalPage: React.FC = () => {
 
             {activeTab === 'activity' && (
                 <div className="bg-white border border-slate-200 rounded-md divide-y divide-slate-100">
-                    {logs.map((log) => (
-                        <div key={log.id} className="px-4 py-3 flex items-center justify-between gap-3 hover:bg-slate-50">
-                            <div className="min-w-0">
-                                <p className="text-[11px] font-bold text-slate-800">{log.userName}</p>
-                                <p className="text-[10px] text-slate-500 truncate">{log.action}</p>
-                            </div>
-                            <span className="text-[9px] font-bold text-slate-400 uppercase shrink-0">
-                                {log.timestamp && format(log.timestamp.toDate(), 'MMM d, h:mm a')}
-                            </span>
+                    {logs.length === 0 ? (
+                        <div className="p-12 text-center text-[11px] text-slate-400 font-bold uppercase tracking-widest">
+                            No activity yet — front desk actions will appear here as staff work queues and estimates
                         </div>
-                    ))}
+                    ) : (
+                        logs.map((log) => (
+                            <div key={log.id} className="px-4 py-3 flex items-center justify-between gap-3 hover:bg-slate-50">
+                                <div className="min-w-0">
+                                    <p className="text-[11px] font-bold text-slate-800">{log.userName}</p>
+                                    <p className="text-[10px] text-slate-600 truncate">{log.action}</p>
+                                    {log.section ? (
+                                        <p className="text-[9px] font-bold text-slate-400 uppercase mt-0.5 tracking-wide">
+                                            {String(log.section)}
+                                        </p>
+                                    ) : null}
+                                </div>
+                                <span className="text-[9px] font-bold text-slate-400 uppercase shrink-0">
+                                    {log.timestamp?.toDate ? format(log.timestamp.toDate(), 'MMM d, h:mm a') : '—'}
+                                </span>
+                            </div>
+                        ))
+                    )}
                 </div>
             )}
 
@@ -768,7 +779,7 @@ const AdminPortalPage: React.FC = () => {
                 <div className="bg-white border border-slate-200 rounded-md divide-y divide-slate-100">
                     {auditLogs.length === 0 ? (
                         <div className="p-12 text-center text-[11px] text-slate-400 font-bold uppercase tracking-widest">
-                            No audit entries yet
+                            No audit entries yet — saves from queues, estimates, and tasks will show here
                         </div>
                     ) : (
                         auditLogs.map((entry) => (

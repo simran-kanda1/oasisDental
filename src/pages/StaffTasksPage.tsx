@@ -489,62 +489,35 @@ const StaffTasksPage: React.FC = () => {
                     <Button
                         variant="outline"
                         size="sm"
-                        className="h-8 text-[10px] font-bold uppercase"
+                        className="h-8 w-8 p-0 text-sm font-black text-slate-700"
+                        aria-label="Previous month"
                         onClick={() => {
                             const nextMonth = startOfMonth(addMonths(viewMonth, -1));
                             setViewMonth(nextMonth);
                             setSelectedDate(alignDateToMonth(nextMonth, selectedDate));
                         }}
                     >
+                        &lt;
                     </Button>
                     <span className="text-xs font-black text-slate-800 min-w-[120px] text-center uppercase">{format(viewMonth, 'MMMM yyyy')}</span>
                     <Button
                         variant="outline"
                         size="sm"
-                        className="h-8 text-[10px] font-bold uppercase"
+                        className="h-8 w-8 p-0 text-sm font-black text-slate-700"
+                        aria-label="Next month"
                         onClick={() => {
                             const nextMonth = startOfMonth(addMonths(viewMonth, 1));
                             setViewMonth(nextMonth);
                             setSelectedDate(alignDateToMonth(nextMonth, selectedDate));
                         }}
                     >
+                        &gt;
                     </Button>
                     <Button size="sm" className="h-8 text-[10px] font-bold uppercase bg-teal-600" onClick={() => { const t = new Date(); setViewMonth(startOfMonth(t)); setSelectedDate(t); }}>
                         Jump to today
                     </Button>
                 </div>
             </div>
-
-            <div className="rounded-lg border border-teal-100 bg-gradient-to-br from-teal-50/80 to-white p-4 flex flex-col sm:flex-row gap-4 sm:items-center">
-                <div className="flex items-start gap-3 shrink-0">
-                    <div className="rounded-lg bg-teal-600 p-2 text-white shadow-sm">
-                    </div>
-                    <div>
-                        <p className="text-xs font-black text-teal-900 uppercase tracking-tight">Daily rhythm</p>
-                        <ol className="mt-2 space-y-1.5 text-[11px] text-slate-700 list-decimal list-inside leading-snug max-w-xl">
-                            <li>Pick today on the week strip (amber outline = today).</li>
-                            <li>Tap a task title (teal) to open the linked queue or page; check off when done.</li>
-                            <li>Add a note on the speech icon if something is blocked.</li>
-                            <li>Work assigned-to-you items at the top first.</li>
-                            <li>Use the counters below to jump to no future appointments, estimates, or inquiries.</li>
-                        </ol>
-                    </div>
-                </div>
-                <div className="flex flex-wrap gap-2 sm:justify-end sm:ml-auto">
-                    <Button variant="outline" size="sm" className="h-8 text-[9px] font-bold uppercase" onClick={() => navigateToSection('frontDeskQueues')}>
-                        No future appointments
-                    </Button>
-                    <Button variant="outline" size="sm" className="h-8 text-[9px] font-bold uppercase" onClick={() => navigateToSection('followUpOutreach')}>
-                        Estimates
-                    </Button>
-                </div>
-            </div>
-
-            <ChecklistWeekStrip>
-                {weekDays.map((d) => (
-                    <WeekDayColumn key={d.toISOString()} day={d} />
-                ))}
-            </ChecklistWeekStrip>
 
             <div className="bg-white border border-slate-200 rounded-lg p-4 shadow-sm space-y-4">
                 <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 border-b border-slate-100 pb-3">
@@ -633,6 +606,31 @@ const StaffTasksPage: React.FC = () => {
                     ))}
                 </div>
             </div>
+
+            <div className="rounded-lg border border-teal-100 bg-teal-50/80 p-4 flex flex-col sm:flex-row gap-4 sm:items-center">
+                <div className="flex items-start gap-3 shrink-0">
+                    <div>
+                        <p className="text-xs font-black text-teal-900 uppercase tracking-tight">Daily rhythm</p>
+                        <p className="mt-1 text-[11px] text-slate-600 leading-snug max-w-xl">
+                            Tap a day on the strip below to switch the selected day above. Use the counters to jump to queues, estimates, or inquiries.
+                        </p>
+                    </div>
+                </div>
+                <div className="flex flex-wrap gap-2 sm:justify-end sm:ml-auto">
+                    <Button variant="outline" size="sm" className="h-8 text-[9px] font-bold uppercase" onClick={() => navigateToSection('frontDeskQueues')}>
+                        No future appointments
+                    </Button>
+                    <Button variant="outline" size="sm" className="h-8 text-[9px] font-bold uppercase" onClick={() => navigateToSection('followUpOutreach')}>
+                        Estimates
+                    </Button>
+                </div>
+            </div>
+
+            <ChecklistWeekStrip>
+                {weekDays.map((d) => (
+                    <WeekDayColumn key={d.toISOString()} day={d} />
+                ))}
+            </ChecklistWeekStrip>
 
             <TaskLinkPicker
                 open={!!linkPicker}

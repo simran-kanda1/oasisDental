@@ -38,6 +38,13 @@ import { Input } from '../components/ui/input';
 import { Button } from '../components/ui/button';
 import { useNavBadges } from '../contexts/NavBadgeContext';
 import { useFrontDeskData } from '../contexts/FrontDeskDataContext';
+import { useAuth } from '../contexts/AuthContext';
+import {
+  ACTIVITY_SECTION_FRONT_DESK_QUEUES,
+  logStaffActivity,
+  staffActorFromAuth,
+} from '../lib/activityLogger';
+import { logStaffAudit, summarizeQueueTrackingPatch } from '../lib/auditTrail';
 import { DEFAULT_AGE_BUCKET, DEFAULT_WEEK_BUCKET } from '../lib/navBadgeCounts';
 import { format } from 'date-fns';
 import { PageLoadingPanel } from '../components/ui/skeleton';
@@ -114,6 +121,8 @@ function QueueNavBadge({ count }: { count: number }) {
 }
 
 const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueId }) => {
+  const { user, userProfile } = useAuth();
+  const staffActor = staffActorFromAuth(user, userProfile?.displayName);
   const { frontDeskByQueue } = useNavBadges();
   const {
     allAppointments,
@@ -314,7 +323,7 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
   }, []);
 
   const persistTracking = useCallback(
-    (appointmentFirestoreId: string, patientId: string, patch: Partial<QueueRowTrackingDoc>) => {
+    (appointmentFirestoreId: string, patientId: string, patch: Partial<QueueRowTrackingDoc>, patientName?: string) => {
       setLocalTrackingOverride((prev) => ({
         ...prev,
         [appointmentFirestoreId]: { ...(prev[appointmentFirestoreId] ?? {}), ...patch },
@@ -328,12 +337,29 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
           patientId,
           queueId: activeId,
           updatedAt: new Date().toISOString(),
+          updatedBy: staffActor?.userName,
           ...patch,
         },
         { merge: true }
       );
+
+      const summary = summarizeQueueTrackingPatch(patch as Record<string, unknown>);
+      const who = patientName ? `${patientName} · ` : '';
+      void logStaffActivity(staffActor, {
+        action: `${who}${summary.action}`,
+        section: ACTIVITY_SECTION_FRONT_DESK_QUEUES,
+        detail: JSON.stringify({ queueId: activeId, patientId, appointmentId: id, field: summary.field }),
+      });
+      void logStaffAudit(staffActor, {
+        entityType: 'queueRow',
+        entityId: id,
+        action: summary.action,
+        field: summary.field,
+        newValue: summary.newValue,
+        detail: `${activeId}${patientName ? ` · ${patientName}` : ''} · patient ${patientId}`,
+      });
     },
-    [activeId, flashQueueSaveNotice]
+    [activeId, flashQueueSaveNotice, staffActor]
   );
 
   const reasonOptions = getNotRebookedReasonOptionsForQueue(activeId);
@@ -699,7 +725,7 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
                                   const next = parseTrackingYesNo(e.target.value);
                                   persistTracking(row.appointmentFirestoreId, row.patientId, {
                                     referredToSpecialist: next,
-                                  });
+                                  }, row.patientName);
                                 }}
                               >
                                 <option value="">—</option>
@@ -716,7 +742,7 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
                                   const next = parseTrackingYesNo(e.target.value);
                                   persistTracking(row.appointmentFirestoreId, row.patientId, {
                                     followUpAppointmentBooked: next,
-                                  });
+                                  }, row.patientName);
                                 }}
                               >
                                 <option value="">—</option>
@@ -735,7 +761,7 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
                                 const next = parseTrackingYesNo(e.target.value);
                                 persistTracking(row.appointmentFirestoreId, row.patientId, {
                                   startTreatment: next,
-                                });
+                                }, row.patientName);
                               }}
                             >
                               <option value="">—</option>
@@ -753,7 +779,7 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
                                 const next = parseTrackingYesNo(e.target.value);
                                 persistTracking(row.appointmentFirestoreId, row.patientId, {
                                   depositTaken: next,
-                                });
+                                }, row.patientName);
                               }}
                             >
                               <option value="">—</option>
@@ -790,7 +816,7 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
                                 notRebookedReason: value || undefined,
                                 notRebookedReasonAt: value ? new Date().toISOString() : undefined,
                                 ...queueReasonRemovalPatch(activeId, value),
-                              });
+                              }, row.patientName);
                             }}
                           >
                             {reasonOptions.map((o) => (
@@ -828,7 +854,7 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
                               onClick={() => {
                                 persistTracking(row.appointmentFirestoreId, row.patientId, {
                                   notes: noteVal.trim() || undefined,
-                                });
+                                }, row.patientName);
                                 setNoteDraftByApptId((prev) => {
                                   const next = { ...prev };
                                   delete next[draftKey];
@@ -861,7 +887,7 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
                                     persistTracking(row.appointmentFirestoreId, row.patientId, {
                                       treatmentComplete: true,
                                       treatmentCompleteAt: new Date().toISOString(),
-                                    })
+                                    }, row.patientName)
                                   }
                                 >
                                   Treatment complete
@@ -877,7 +903,7 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
                                   persistTracking(row.appointmentFirestoreId, row.patientId, {
                                     removedFromList: true,
                                     removedAt: new Date().toISOString(),
-                                  })
+                                  }, row.patientName)
                                 }
                               >
                                 Remove

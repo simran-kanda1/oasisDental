@@ -5,6 +5,12 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Select } from '../components/ui/select';
 import { useAuth } from '../contexts/AuthContext';
+import {
+  ACTIVITY_SECTION_FOLLOW_UP_OUTREACH,
+  logStaffActivity,
+  staffActorFromAuth,
+} from '../lib/activityLogger';
+import { logStaffAudit } from '../lib/auditTrail';
 import { fetchCoverageForPlans } from '../lib/estimateProcedureCoverage';
 import { fetchLedgerForPatients, filterLedgerRowsWithinMonths } from '../lib/ledgerTransactions';
 import {
@@ -179,6 +185,7 @@ const TAB_LABELS: Record<EstimateFollowUpHubTab, string> = {
 
 const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab = 'pred_approved' }) => {
   const { user, userProfile } = useAuth();
+  const staffActor = staffActorFromAuth(user, userProfile?.displayName);
   const [tab, setTab] = useState<EstimateFollowUpHubTab>(initialTab);
   const [patientInfoById, setPatientInfoById] = useState<Record<string, DentrixPatientAppointmentInfoDoc>>({});
   const [documents, setDocuments] = useState<DentrixDocumentDoc[]>([]);
@@ -789,7 +796,11 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
     };
   }, [visibleRows, coverageByPlanId]);
 
-  const upsertDocumentFollowUp = async (row: DocumentEstimateRow, patch: Record<string, unknown>) => {
+  const upsertDocumentFollowUp = async (
+    row: DocumentEstimateRow,
+    patch: Record<string, unknown>,
+    activityAction?: string
+  ) => {
     await setDoc(
       doc(db, 'followUps', row.followUpDocId),
       {
@@ -809,17 +820,39 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
       },
       { merge: true }
     );
+
+    if (activityAction) {
+      void logStaffActivity(staffActor, {
+        action: activityAction,
+        section: ACTIVITY_SECTION_FOLLOW_UP_OUTREACH,
+        detail: JSON.stringify({
+          patientId: row.patientId,
+          followUpDocId: row.followUpDocId,
+          docId: row.docId,
+        }),
+      });
+      void logStaffAudit(staffActor, {
+        entityType: 'estimate',
+        entityId: row.followUpDocId,
+        action: activityAction,
+        detail: `${row.patientName} · doc ${row.docId}`,
+      });
+    }
   };
 
   const handleMarkCovered = async (row: DocumentEstimateRow) => {
     setUpdatingId(row.followUpDocId);
     try {
-      await upsertDocumentFollowUp(row, {
-        status: 'covered_eob',
-        outcome: 'Approved — explanation of benefits on file',
-        documentCoveredNoted: true,
-        nextAppointmentBooked: true,
-      });
+      await upsertDocumentFollowUp(
+        row,
+        {
+          status: 'covered_eob',
+          outcome: 'Approved — explanation of benefits on file',
+          documentCoveredNoted: true,
+          nextAppointmentBooked: true,
+        },
+        `Estimate noted (EOB): ${row.patientName}`
+      );
       flashSaveNotice(row.followUpDocId, 'Marked noted');
     } finally {
       setUpdatingId(null);
@@ -902,7 +935,11 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
     const patch = buildActionPatch(row, action, enabled, extra);
     applyFollowUpPatch(row.followUpDocId, patch);
     try {
-      await upsertDocumentFollowUp(row, patch);
+      await upsertDocumentFollowUp(
+        row,
+        patch,
+        `${enabled ? '' : 'Cleared · '}${ESTIMATE_ACTION_LABELS[action]}: ${row.patientName}`
+      );
       flashSaveNotice(row.followUpDocId);
     } catch (err) {
       console.error('follow-up save failed', err);
@@ -953,8 +990,20 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
         { merge: true }
       );
     }
+    const patientName = String(previousFollowUp?.patient_name ?? undoClose.row.patientName ?? 'patient');
+    void logStaffActivity(staffActor, {
+      action: `Undid treatment complete: ${patientName}`,
+      section: ACTIVITY_SECTION_FOLLOW_UP_OUTREACH,
+      detail: JSON.stringify({ followUpDocId }),
+    });
+    void logStaffAudit(staffActor, {
+      entityType: 'estimate',
+      entityId: followUpDocId,
+      action: `Undid treatment complete: ${patientName}`,
+      detail: followUpDocId,
+    });
     flashSaveNotice(followUpDocId, 'Undone');
-  }, [undoClose, clearUndoTimer, applyFollowUpPatch, flashSaveNotice]);
+  }, [undoClose, clearUndoTimer, applyFollowUpPatch, flashSaveNotice, staffActor]);
 
   const handleTreatmentComplete = async (row: DocumentEstimateRow) => {
     const confirmed = window.confirm(
@@ -984,7 +1033,7 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
     applyFollowUpPatch(row.followUpDocId, patch);
     setSavingId(row.followUpDocId);
     try {
-      await upsertDocumentFollowUp(row, patch);
+      await upsertDocumentFollowUp(row, patch, `Outreach logged: ${row.patientName} — treatment complete`);
     } catch (err) {
       console.error('treatment complete save failed', err);
       setPendingRemovalIds((prev) => {
@@ -1010,10 +1059,14 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
     if (!draft) return;
     setSavingId(row.followUpDocId);
     try {
-      await upsertDocumentFollowUp(row, {
-        snoozeUntil: `${draft}T12:00:00.000Z`,
-        status: 'estimate_followup',
-      });
+      await upsertDocumentFollowUp(
+        row,
+        {
+          snoozeUntil: `${draft}T12:00:00.000Z`,
+          status: 'estimate_followup',
+        },
+        `Snoozed estimate: ${row.patientName}`
+      );
       setSnoozeDraft((prev) => {
         const next = { ...prev };
         delete next[row.followUpDocId];

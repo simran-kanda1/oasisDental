@@ -4,6 +4,8 @@ import { db } from './firebase';
 /** Use with `detail` JSON for dashboard KPIs. */
 export const ACTIVITY_SECTION_RECALL_QUEUE = 'recallQueue';
 export const ACTIVITY_SECTION_FOLLOW_UP_OUTREACH = 'followUpOutreach';
+export const ACTIVITY_SECTION_FRONT_DESK_QUEUES = 'frontDeskQueues';
+export const ACTIVITY_SECTION_INQUIRIES = 'Inquiries';
 
 export interface ActivityLog {
     id?: string;
@@ -14,6 +16,24 @@ export interface ActivityLog {
     section: string;
     detail?: string;
     timestamp?: Timestamp;
+}
+
+export type StaffActor = {
+    userId: string;
+    userEmail: string;
+    userName: string;
+};
+
+export function staffActorFromAuth(
+    user?: { uid: string; email: string | null } | null,
+    displayName?: string | null
+): StaffActor | null {
+    if (!user?.uid || !user.email) return null;
+    return {
+        userId: user.uid,
+        userEmail: user.email,
+        userName: displayName?.trim() || user.email,
+    };
 }
 
 export function buildOutreachActivityDetail(payload: {
@@ -38,6 +58,15 @@ export async function logActivity(log: Omit<ActivityLog, 'id' | 'timestamp'>) {
         // Silently fail — logging should never break the UI
         console.warn('Activity log failed:', err);
     }
+}
+
+/** No-op when the signed-in user is missing (e.g. rare race during logout). */
+export async function logStaffActivity(
+    actor: StaffActor | null,
+    options: { action: string; section: string; detail?: string }
+): Promise<void> {
+    if (!actor) return;
+    await logActivity({ ...actor, ...options });
 }
 
 export async function getRecentActivity(limitCount = 50): Promise<ActivityLog[]> {
