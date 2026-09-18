@@ -4,7 +4,6 @@ import { db } from '../lib/firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { format, startOfWeek, addDays, endOfDay, parseISO, isValid } from 'date-fns';
 import { cn } from '../lib/utils';
-import { Activity, AlertTriangle, Calendar, ListTodo, MessageSquare, PhoneCall } from 'lucide-react';
 import type { DentrixAppointmentDoc, DentrixPatientAppointmentInfoDoc, DentrixPatientDoc } from '../lib/dentrix';
 import {
     cleanDentrixText,
@@ -242,19 +241,18 @@ const DashboardPage: React.FC = () => {
     const stats: Array<{
         label: string;
         value: number;
-        icon: typeof Calendar;
         color: string;
         border: string;
         onClick?: () => void;
     }> = [
-        { label: 'Today Appointments', value: counts.appointmentsToday, icon: Calendar, color: 'text-teal-600', border: 'border-teal-200', onClick: () => navigateToSection('appointments') },
-        { label: 'Week Appointments', value: counts.appointmentsThisWeek, icon: Calendar, color: 'text-blue-600', border: 'border-blue-200', onClick: () => navigateToSection('appointments') },
-        { label: 'Open Inquiries', value: counts.openInquiries, icon: MessageSquare, color: 'text-indigo-600', border: 'border-indigo-200', onClick: () => navigateToSection('inquiries') },
-        { label: 'No future appointments', value: counts.pendingRecallQueue, icon: PhoneCall, color: 'text-amber-600', border: 'border-amber-200', onClick: () => navigateToSection('frontDeskQueues', NO_APPT_BOOKED_QUEUE_ID) },
-        { label: 'Estimate follow-up', value: counts.pendingOutreachQueue, icon: PhoneCall, color: 'text-orange-600', border: 'border-orange-200', onClick: () => navigateToSection('followUpOutreach') },
-        { label: 'Overdue Recalls', value: counts.overdueRecalls, icon: AlertTriangle, color: 'text-rose-600', border: 'border-rose-200', onClick: () => navigateToSection('frontDeskQueues', NO_APPT_BOOKED_QUEUE_ID) },
-        { label: 'High-Risk Patients', value: counts.highRiskPatients, icon: AlertTriangle, color: 'text-fuchsia-600', border: 'border-fuchsia-200', onClick: () => navigateToSection('frontDeskQueues', NO_APPT_BOOKED_QUEUE_ID) },
-        { label: 'Checklist', value: counts.tasksRemaining, icon: ListTodo, color: 'text-slate-600', border: 'border-slate-300', onClick: () => navigateToSection('staffTasks') },
+        { label: 'Today Appointments', value: counts.appointmentsToday, color: 'text-teal-700', border: 'border-teal-200', onClick: () => navigateToSection('appointments') },
+        { label: 'Week Appointments', value: counts.appointmentsThisWeek, color: 'text-sky-700', border: 'border-sky-200', onClick: () => navigateToSection('appointments') },
+        { label: 'Open Inquiries', value: counts.openInquiries, color: 'text-slate-700', border: 'border-slate-200', onClick: () => navigateToSection('inquiries') },
+        { label: 'No future appointments', value: counts.pendingRecallQueue, color: 'text-amber-700', border: 'border-amber-200', onClick: () => navigateToSection('frontDeskQueues', NO_APPT_BOOKED_QUEUE_ID) },
+        { label: 'Estimate follow-up', value: counts.pendingOutreachQueue, color: 'text-orange-700', border: 'border-orange-200', onClick: () => navigateToSection('followUpOutreach') },
+        { label: 'Overdue Recalls', value: counts.overdueRecalls, color: 'text-rose-700', border: 'border-rose-200', onClick: () => navigateToSection('frontDeskQueues', NO_APPT_BOOKED_QUEUE_ID) },
+        { label: 'High-Risk Patients', value: counts.highRiskPatients, color: 'text-fuchsia-700', border: 'border-fuchsia-200', onClick: () => navigateToSection('frontDeskQueues', NO_APPT_BOOKED_QUEUE_ID) },
+        { label: 'Checklist', value: counts.tasksRemaining, color: 'text-slate-700', border: 'border-slate-300', onClick: () => navigateToSection('staffTasks') },
     ];
 
     return (
@@ -262,11 +260,11 @@ const DashboardPage: React.FC = () => {
             {/* Header */}
             <div className="bg-white border border-slate-200 rounded-md p-4 flex flex-col md:flex-row items-center justify-between gap-4">
                 <div>
-                    <h1 className="text-xl font-bold text-slate-900 tracking-tight">Oasis Dental Dashboard</h1>
-                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">Clinical Operations Real-time Signal</p>
+                    <h1 className="text-xl font-semibold text-slate-900 tracking-tight">Oasis Dental Dashboard</h1>
+                    <p className="text-xs text-slate-500 mt-0.5">Today’s overview for the front desk</p>
                 </div>
-                <div className="bg-teal-50 px-3 py-1.5 rounded border border-teal-100 text-[10px] font-bold text-teal-600 uppercase tracking-tight">
-                    System Hub Active
+                <div className="bg-teal-50 px-3 py-1.5 rounded-xl border border-teal-100 text-xs font-medium text-teal-700">
+                    Oasis Dental
                 </div>
             </div>
 
@@ -275,7 +273,6 @@ const DashboardPage: React.FC = () => {
             ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
                 {stats.map((stat, i) => {
-                    const Icon = stat.icon;
                     const Wrapper = stat.onClick ? 'button' : 'div';
                     return (
                         <Wrapper
@@ -283,18 +280,13 @@ const DashboardPage: React.FC = () => {
                             type={stat.onClick ? 'button' : undefined}
                             onClick={stat.onClick}
                             className={cn(
-                                "bg-white border p-4 rounded-md shadow-sm flex items-center gap-4 transition-all text-left w-full",
+                                "bg-white border p-4 rounded-xl flex flex-col gap-2 transition-all text-left w-full",
                                 stat.border,
-                                stat.onClick && "hover:shadow-md hover:border-teal-300 cursor-pointer"
+                                stat.onClick && "hover:border-teal-400 cursor-pointer"
                             )}
                         >
-                            <div className={cn("w-10 h-10 rounded bg-slate-50 flex items-center justify-center shrink-0", stat.color)}>
-                                <Icon size={20} />
-                            </div>
-                            <div>
-                                <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest leading-none mb-1">{stat.label}</p>
-                                <p className="text-2xl font-bold text-slate-900 tabular-nums tracking-tight leading-none">{stat.value}</p>
-                            </div>
+                            <p className={cn("text-xs font-medium", stat.color)}>{stat.label}</p>
+                            <p className="text-2xl font-semibold text-slate-900 tabular-nums tracking-tight leading-none">{stat.value}</p>
                         </Wrapper>
                     );
                 })}
@@ -405,7 +397,6 @@ const DashboardPage: React.FC = () => {
                 <div className="bg-white border border-slate-200 rounded-md overflow-hidden xl:col-span-2">
                     <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
                         <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
-                            <Activity size={14} className="text-teal-600" />
                             Recent Activity Log
                         </h3>
                     </div>
@@ -413,7 +404,7 @@ const DashboardPage: React.FC = () => {
                         {loading ? (
                             <TableRowsSkeleton rows={5} />
                         ) : recentActivity.length === 0 ? (
-                            <div className="text-center p-12 opacity-30 text-[10px] uppercase font-bold tracking-widest">No Signals Recorded</div>
+                            <div className="text-center p-12 text-sm text-slate-400">No recent activity</div>
                         ) : (
                             recentActivity.map((log, i) => (
                                 <div key={i} className="px-4 py-3 hover:bg-slate-50 transition-colors flex items-center justify-between gap-4">
@@ -495,7 +486,7 @@ const DashboardPage: React.FC = () => {
 
             <div className="bg-white border border-slate-200 rounded-md overflow-hidden">
                 <div className="px-4 py-3 bg-slate-50 border-b border-slate-200">
-                    <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Live Front Desk Activity (Today)</h3>
+                    <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Front desk activity today</h3>
                 </div>
                 <div className="p-4 grid grid-cols-1 md:grid-cols-4 gap-3">
                     {frontDeskUsers.length === 0 ? (

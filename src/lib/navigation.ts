@@ -8,7 +8,6 @@ export type AppSection =
   | 'frontDeskQueues'
   | 'inquiries'
   | 'estimates'
-  | 'weave'
   | 'admin'
   | 'staffTasks'
   | 'settings';

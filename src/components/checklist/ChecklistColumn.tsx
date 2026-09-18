@@ -1,6 +1,5 @@
 import React from 'react';
 import { format } from 'date-fns';
-import { ChevronRight, MessageSquare } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import type { ChecklistTaskRow } from './ChecklistBoard';
 
@@ -62,7 +61,6 @@ export const ChecklistColumn: React.FC<ChecklistColumnProps> = ({
                       )}
                     >
                       <span className="flex-1">{task.title}</span>
-                      <ChevronRight className="w-3.5 h-3.5 shrink-0 mt-0.5 opacity-50 group-hover/link:opacity-100" />
                     </button>
                   ) : (
                     <p className={cn('text-[12px] font-medium text-slate-800 leading-snug', done && 'line-through text-slate-500')}>
@@ -88,7 +86,6 @@ export const ChecklistColumn: React.FC<ChecklistColumnProps> = ({
                   className="p-1 text-slate-300 hover:text-teal-600 shrink-0"
                   aria-label="Note"
                 >
-                  <MessageSquare size={14} />
                 </button>
               </div>
             );

@@ -15,10 +15,10 @@ import { LogOutreachModal, type OutreachLogPayload } from '../components/LogOutr
 import { PatientProfileTrigger } from '../components/PatientProfileTrigger';
 import { getNotRebookedReasonOptionsForQueue, queueReasonRemovalPatch, queueReasonRemovesFromList } from '../lib/notRebookedReasons';
 import { NO_APPT_BOOKED_QUEUE_DEF, NO_APPT_BOOKED_QUEUE_ID } from '../data/queueRules';
-import { UserX } from 'lucide-react';
 import { useFrontDeskData } from '../contexts/FrontDeskDataContext';
 import { APPOINTMENTS_QUERY_LIMIT } from '../lib/appointmentsQuery';
 import { appendTimestampedFollowUpNote, latestNotePreview } from '../lib/followUpNotes';
+import { PageLoadingPanel } from '../components/ui/skeleton';
 import {
     isActiveScheduledAppointment,
     isAppointmentOnOrAfterToday,
@@ -91,8 +91,6 @@ interface FollowUpTrackingDoc {
     removedAt?: string;
 }
 
-type BookingDraft = { date: string; type: string };
-
 export interface FollowUpsPageProps {
     /** Render inside No future appointments hub (no duplicate page chrome). */
     embedded?: boolean;
@@ -101,13 +99,11 @@ export interface FollowUpsPageProps {
 const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
     const { user, userProfile } = useAuth();
     const frontDeskData = useFrontDeskData();
-    const [loading, setLoading] = useState(!embedded);
+    const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState('');
     const [updatingId, setUpdatingId] = useState<string | null>(null);
     const [activeNoteId, setActiveNoteId] = useState<string | null>(null);
     const [noteDraft, setNoteDraft] = useState('');
-    const [bookingId, setBookingId] = useState<string | null>(null);
-    const [bookingDraft, setBookingDraft] = useState<BookingDraft>({ date: '', type: '' });
     const [providerFilter, setProviderFilter] = useState<string>('all');
     const [minMissedFilter, setMinMissedFilter] = useState<number>(1);
     const [statusFilter, setStatusFilter] = useState<'open' | 'booked' | 'all'>('open');
@@ -147,7 +143,7 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
         });
 
         if (embedded) {
-            setLoading(frontDeskData.appointmentsLoading);
+            setLoading(frontDeskData.coreDataLoading);
             return () => unsubTracking();
         }
 
@@ -192,7 +188,7 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
             unsubAppointments();
             unsubTracking();
         };
-    }, [embedded, frontDeskData.appointmentsLoading]);
+    }, [embedded, frontDeskData.coreDataLoading]);
 
     const items = useMemo(() => {
         const rows: (DentrixFollowUpWorkItem & { trackingId: string; tracking?: FollowUpTrackingDoc })[] = [];
@@ -400,21 +396,6 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
         setNoteDraft('');
     };
 
-    const completeBooking = async (item: DentrixFollowUpWorkItem & { trackingId: string; tracking?: FollowUpTrackingDoc }) => {
-        if (!bookingDraft.date || !bookingDraft.type) return;
-        setUpdatingId(item.patientId);
-        await upsertTracking(item, {
-            status: 'completed',
-            queue: FOLLOW_UP_QUEUE_RECALL,
-            nextAppointmentBooked: true,
-            nextAppointmentDate: bookingDraft.date,
-            outcome: `Booked: ${bookingDraft.type} on ${bookingDraft.date}`,
-        });
-        setUpdatingId(null);
-        setBookingId(null);
-        setBookingDraft({ date: '', type: '' });
-    };
-
     const recallReasonOptions = getNotRebookedReasonOptionsForQueue(NO_APPT_BOOKED_QUEUE_ID);
 
     const removeFromList = async (
@@ -429,7 +410,6 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
     };
 
     const selectedForNote = items.find((x) => x.patientId === activeNoteId);
-    const selectedForBooking = items.find((x) => x.patientId === bookingId);
 
     return (
         <div className={embedded ? 'space-y-4 max-w-full font-sans' : 'p-8 space-y-6 max-w-full mx-auto bg-white font-sans pb-20'}>
@@ -488,7 +468,7 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
             </div>
 
             {loading ? (
-                <div className="p-16 text-center uppercase text-[10px] font-black text-slate-300 tracking-widest">Syncing...</div>
+                <PageLoadingPanel message="Loading no future appointments…" />
             ) : (
                 <div className="border border-slate-200 rounded-lg overflow-hidden overflow-x-auto max-h-[calc(100vh-16rem)] overflow-y-auto bg-white">
                     <table className="w-full text-left text-sm min-w-[1100px]">
@@ -507,7 +487,6 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
                                     <th className="p-3">Last appointment</th>
                                     <th className="p-3">Outreach</th>
                                     <th className="p-3 pr-4 min-w-[200px]">Notes</th>
-                                    <th className="p-3 pr-4 min-w-[148px]">Actions</th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100">
@@ -522,7 +501,6 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
                                                 onClick={() => void removeFromList(item)}
                                                 className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-rose-200 text-rose-600 hover:bg-rose-50 disabled:opacity-40"
                                             >
-                                                <UserX className="h-4 w-4" />
                                             </button>
                                         </td>
                                         <td className="p-3 font-bold text-slate-900">
@@ -607,17 +585,6 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
                                                 </p>
                                             </div>
                                         </td>
-                                        <td className="p-3 pr-4 align-top">
-                                            <Button
-                                                type="button"
-                                                size="sm"
-                                                variant="outline"
-                                                onClick={() => setBookingId(item.patientId)}
-                                                className="h-8 w-full text-[9px] font-black uppercase border-slate-200 text-slate-700 hover:bg-slate-50 whitespace-nowrap"
-                                            >
-                                                Set next appt
-                                            </Button>
-                                        </td>
                                     </tr>
                                 ))}
                             </tbody>
@@ -656,42 +623,6 @@ const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ embedded = false }) => {
                 }}
                 saving={!!logModalItem && updatingId === logModalItem.patientId}
             />
-
-            {selectedForBooking && (
-                <>
-                    <div className="fixed inset-0 bg-slate-900/10 backdrop-blur-sm z-[100]" onClick={() => setBookingId(null)} />
-                    <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-sm bg-white rounded-[2.5rem] shadow-2xl border border-slate-100 p-12 z-[101]">
-                        <h3 className="text-[10px] font-black text-slate-900 uppercase tracking-[0.3em] mb-8 border-b pb-4 border-slate-50">Book Next Appointment</h3>
-                        <div className="space-y-6">
-                            <div className="space-y-2">
-                                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Appointment Type</label>
-                                <Input
-                                    value={bookingDraft.type}
-                                    onChange={(e) => setBookingDraft(prev => ({ ...prev, type: e.target.value }))}
-                                    placeholder="e.g. Recall Hygiene"
-                                    className="h-12 border-slate-100 bg-slate-50/50 rounded-2xl text-[11px] font-black uppercase"
-                                />
-                            </div>
-                            <div className="space-y-2">
-                                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Appointment Date</label>
-                                <Input
-                                    type="date"
-                                    value={bookingDraft.date}
-                                    onChange={(e) => setBookingDraft(prev => ({ ...prev, date: e.target.value }))}
-                                    className="h-12 border-slate-100 bg-slate-50/50 rounded-2xl text-[11px] font-black uppercase"
-                                />
-                            </div>
-                            <Button
-                                onClick={() => completeBooking(selectedForBooking)}
-                                disabled={!bookingDraft.date || !bookingDraft.type || !!updatingId}
-                                className="w-full h-14 bg-teal-600 hover:bg-teal-700 text-white font-black text-[11px] uppercase tracking-[0.2em] rounded-2xl"
-                            >
-                                Save Booking
-                            </Button>
-                        </div>
-                    </div>
-                </>
-            )}
         </div>
     );
 };

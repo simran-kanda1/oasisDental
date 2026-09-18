@@ -16,7 +16,6 @@ const AppointmentsPage = lazy(() => import('./pages/AppointmentsPage'));
 const FollowUpOutreachPage = lazy(() => import('./pages/FollowUpOutreachPage'));
 const FrontDeskQueuesPage = lazy(() => import('./pages/FrontDeskQueuesPage'));
 const InquiriesPage = lazy(() => import('./pages/InquiriesPage'));
-const EstimatesPage = lazy(() => import('./pages/EstimatesPage'));
 const AdminPortalPage = lazy(() => import('./pages/AdminPortalPage'));
 const StaffTasksPage = lazy(() => import('./pages/StaffTasksPage'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
@@ -81,7 +80,7 @@ const AppShell: React.FC = () => {
       case 'inquiries':
         return <InquiriesPage />;
       case 'estimates':
-        return <EstimatesPage />;
+        return <FollowUpOutreachPage initialTab="pred_approved" />;
       case 'settings':
         return <SettingsPage />;
       case 'admin':
@@ -108,7 +107,7 @@ const AppShell: React.FC = () => {
             <div className="flex-1 flex flex-col min-w-0">
               <TopBar section={section} queueId={queueId} />
               <main className="flex-1 overflow-auto bg-slate-50/50">
-                <Suspense fallback={<PageLoadingFallback />}>{renderPage()}</Suspense>
+                <Suspense fallback={<PageLoadingFallback message="Loading…" />}>{renderPage()}</Suspense>
               </main>
             </div>
           </div>

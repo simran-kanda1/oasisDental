@@ -1,13 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { cn } from '../../lib/utils';
-import {
-    LayoutDashboard, Calendar, MessageSquare,
-    Menu, X, ChevronRight, LogOut, Bell,
-    ShieldCheck, ListTodo, UsersRound, LayoutList, Settings,
-    Siren, UserPlus, HeartPulse, Scan, Loader2,
-} from 'lucide-react';
 import { GlobalPatientSearch } from '../GlobalPatientSearch';
-import { Tooth } from '../ui/icons';
 import { useAuth } from '../../contexts/AuthContext';
 import {
     type AppNotification,
@@ -35,22 +28,21 @@ type NavBadgeKind = 'inquiries' | 'frontDesk' | 'estimates' | 'queue';
 type NavItem = {
     id: string;
     label: string;
-    icon: typeof LayoutDashboard;
     badge?: NavBadgeKind;
     queueId?: string;
 };
 
 const navItems: NavItem[] = [
-    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-    { id: 'staffTasks', label: 'Checklist', icon: ListTodo },
-    { id: 'appointments', label: 'Appointments', icon: Calendar },
-    { id: 'frontDeskQueues', label: 'No future appointments', icon: LayoutList, badge: 'frontDesk' },
-    { id: 'emerg_follow_up', label: 'Emerg patient follow up', icon: Siren, badge: 'queue', queueId: 'emerg_follow_up' },
-    { id: 'new_patient_follow_up', label: 'New patient follow up', icon: UserPlus, badge: 'queue', queueId: 'new_patient_follow_up' },
-    { id: GA_ALL_APPOINTMENTS_QUEUE_ID, label: 'GA appointments', icon: HeartPulse, badge: 'queue', queueId: GA_ALL_APPOINTMENTS_QUEUE_ID },
-    { id: 'cbct', label: 'CBCT', icon: Scan, badge: 'queue', queueId: 'cbct' },
-    { id: 'followUpOutreach', label: 'Estimates', icon: UsersRound, badge: 'estimates' },
-    { id: 'inquiries', label: 'Inquiries', icon: MessageSquare, badge: 'inquiries' },
+    { id: 'dashboard', label: 'Dashboard' },
+    { id: 'staffTasks', label: 'Checklist' },
+    { id: 'appointments', label: 'Appointments' },
+    { id: 'frontDeskQueues', label: 'No future appointments', badge: 'frontDesk' },
+    { id: 'emerg_follow_up', label: 'Emerg patient follow up', badge: 'queue', queueId: 'emerg_follow_up' },
+    { id: 'new_patient_follow_up', label: 'New patient follow up', badge: 'queue', queueId: 'new_patient_follow_up' },
+    { id: GA_ALL_APPOINTMENTS_QUEUE_ID, label: 'GA appointments', badge: 'queue', queueId: GA_ALL_APPOINTMENTS_QUEUE_ID },
+    { id: 'cbct', label: 'CBCT', badge: 'queue', queueId: 'cbct' },
+    { id: 'followUpOutreach', label: 'Estimates', badge: 'estimates' },
+    { id: 'inquiries', label: 'Inquiries', badge: 'inquiries' },
 ];
 
 function NavCountBadge({
@@ -64,17 +56,15 @@ function NavCountBadge({
 }) {
     if (loading) {
         return (
-            <span className="ml-auto inline-flex min-w-[1.25rem] justify-center px-1.5 py-0.5">
-                <Loader2 className="h-3 w-3 animate-spin text-slate-400" aria-label="Loading" />
-            </span>
+            <span className="ml-auto text-[10px] text-slate-400" aria-label="Loading">…</span>
         );
     }
     if (count <= 0) return null;
     return (
         <span
             className={cn(
-                'ml-auto min-w-[1.25rem] px-1.5 py-0.5 rounded-full text-[9px] font-black text-center leading-none',
-                tone === 'amber' ? 'bg-amber-500 text-white' : 'bg-teal-600 text-white'
+                'ml-auto min-w-[1.25rem] px-1.5 py-0.5 rounded-lg text-[10px] font-semibold text-center leading-none',
+                tone === 'amber' ? 'bg-amber-500 text-white' : 'bg-teal-700 text-white'
             )}
         >
             {count > 99 ? '99+' : count}
@@ -110,8 +100,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeSection, activeQueueId, 
     };
 
     const displayName = userProfile?.displayName ?? user?.email?.split('@')[0] ?? 'User';
-    const initials = displayName.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase();
-
     const handleNav = (item: NavItem) => {
         if (item.queueId) {
             onSectionChange('frontDeskQueues', item.queueId);
@@ -123,101 +111,97 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeSection, activeQueueId, 
 
     const SidebarContent = () => (
         <div className="flex flex-col h-full bg-white">
-            <div className={cn("flex items-center gap-3 px-6 py-4 border-b", collapsed && "px-4 justify-center")}>
-                <div className="w-8 h-8 rounded bg-teal-600 flex items-center justify-center shadow-lg shadow-teal-600/20 shrink-0">
-                    <Tooth className="text-white" size={18} />
-                </div>
-                {!collapsed && (
-                    <h1 className="text-sm font-black text-slate-900 uppercase tracking-tight">Oasis Dental</h1>
+            <div className={cn("flex items-center px-5 py-5 border-b border-slate-100", collapsed && "px-3 justify-center")}>
+                {!collapsed ? (
+                    <div>
+                        <h1 className="font-display text-lg text-slate-900 tracking-tight">Oasis Dental</h1>
+                        <p className="text-[11px] text-slate-400 mt-0.5">Front desk</p>
+                    </div>
+                ) : (
+                    <span className="text-xs font-semibold text-teal-700">OD</span>
                 )}
             </div>
 
-            <nav className="flex-1 px-3 py-6 space-y-1 overflow-y-auto">
+            <nav className="flex-1 px-3 py-5 space-y-0.5 overflow-y-auto">
                 {navItems.map((item) => {
-                    const Icon = item.icon;
                     const isActive = isNavItemActive(item);
                     return (
                         <button
                             key={item.id}
                             onClick={() => handleNav(item)}
+                            title={item.label}
                             className={cn(
-                                "w-full flex items-center gap-3 px-3 py-2 rounded-md text-[11px] font-bold uppercase tracking-tight transition-all",
+                                "w-full flex items-center gap-2 px-3 py-2.5 rounded-xl text-[13px] font-medium transition-colors",
                                 isActive
-                                    ? "bg-teal-50 text-teal-600 shadow-sm border border-teal-100"
-                                    : "text-slate-400 hover:text-slate-600 hover:bg-slate-50",
+                                    ? "bg-teal-50 text-teal-800"
+                                    : "text-slate-600 hover:text-slate-900 hover:bg-slate-50",
                                 collapsed && "justify-center px-2"
                             )}
                         >
-                            <Icon size={16} className={isActive ? "text-teal-600" : "text-slate-300"} />
-                            {!collapsed && (
+                            {!collapsed ? (
                                 <>
-                                    <span className="flex-1 text-left">{item.label}</span>
+                                    <span className="flex-1 text-left leading-snug">{item.label}</span>
                                     <NavCountBadge
                                         count={navBadgeCount(item)}
                                         tone={item.badge === 'estimates' ? 'amber' : 'teal'}
                                         loading={item.badge === 'estimates' && !badges.estimatesReady}
                                     />
                                 </>
+                            ) : (
+                                <span className="text-[10px] font-semibold">{item.label.slice(0, 2)}</span>
                             )}
                         </button>
                     );
                 })}
 
                 {isAdmin && (
-                    <div className="pt-8">
-                        {!collapsed && <p className="px-4 text-[8px] font-black text-slate-300 uppercase tracking-[0.3em] mb-2">Admin</p>}
+                    <div className="pt-6">
+                        {!collapsed && <p className="px-3 text-[11px] font-medium text-slate-400 mb-1">Admin</p>}
                         <button
                             onClick={() => {
                                 onSectionChange('admin');
                                 setMobileOpen(false);
                             }}
                             className={cn(
-                                "w-full flex items-center gap-3 px-3 py-2 rounded-md text-[11px] font-bold uppercase tracking-tight transition-all",
-                                activeSection === 'admin' ? "bg-slate-900 text-white shadow-xl" : "text-slate-400 hover:text-slate-600 hover:bg-slate-50",
+                                "w-full flex items-center gap-2 px-3 py-2.5 rounded-xl text-[13px] font-medium transition-colors",
+                                activeSection === 'admin' ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-50",
                                 collapsed && "justify-center px-2"
                             )}
                         >
-                            <ShieldCheck size={16} className={activeSection === 'admin' ? "text-teal-400" : "text-slate-300"} />
                             {!collapsed && <span className="flex-1 text-left">Portal</span>}
+                            {collapsed && <span className="text-[10px] font-semibold">AD</span>}
                         </button>
                     </div>
                 )}
             </nav>
 
-            <div className="px-3 pb-6 border-t mt-auto pt-6 space-y-4">
+            <div className="px-3 pb-5 border-t border-slate-100 mt-auto pt-4 space-y-2">
                 {!collapsed && (
-                    <div className="flex items-center gap-3 p-2 bg-slate-50 rounded-md border border-slate-100">
-                        <div className="w-8 h-8 rounded bg-teal-600 flex items-center justify-center text-[10px] font-black text-white shrink-0 shadow-sm">
-                            {initials}
-                        </div>
-                        <div className="min-w-0">
-                            <p className="text-[10px] font-black text-slate-900 uppercase truncate">{displayName}</p>
-                            <p className="text-[8px] text-slate-400 font-bold uppercase tracking-widest leading-none mt-1 opacity-60">{isAdmin ? 'Admin' : 'Staff'}</p>
-                        </div>
+                    <div className="px-3 py-2 rounded-xl bg-slate-50">
+                        <p className="text-sm font-medium text-slate-900 truncate">{displayName}</p>
+                        <p className="text-[11px] text-slate-400">{isAdmin ? 'Admin' : 'Staff'}</p>
                     </div>
                 )}
                 <button
                     onClick={() => onSectionChange('settings')}
                     className={cn(
-                        "w-full flex items-center gap-3 px-3 py-2 rounded-md text-[10px] font-bold uppercase tracking-tight transition-all",
+                        "w-full text-left px-3 py-2 rounded-xl text-[13px] font-medium transition-colors",
                         activeSection === 'settings'
-                            ? "bg-teal-50 text-teal-600 border border-teal-100"
-                            : "text-slate-400 hover:text-slate-600 hover:bg-slate-50",
-                        collapsed && "justify-center px-2"
+                            ? "bg-teal-50 text-teal-800"
+                            : "text-slate-600 hover:bg-slate-50",
+                        collapsed && "text-center px-2"
                     )}
                 >
-                    <Settings size={16} className="shrink-0" />
-                    {!collapsed && <span>Settings</span>}
+                    {collapsed ? 'Set' : 'Settings'}
                 </button>
                 <button
                     onClick={() => logout()}
                     className={cn(
-                        "w-full flex items-center gap-3 px-3 py-2 text-[10px] font-black text-slate-400 hover:text-rose-600 transition-all uppercase tracking-widest leading-none",
-                        collapsed && "justify-center px-2"
+                        "w-full text-left px-3 py-2 rounded-xl text-[13px] font-medium text-slate-500 hover:text-rose-700 hover:bg-rose-50 transition-colors",
+                        collapsed && "text-center px-2"
                     )}
                 >
-                    <LogOut size={16} className="shrink-0" />
-                    {!collapsed && <span>Logout</span>}
+                    {collapsed ? 'Out' : 'Log out'}
                 </button>
             </div>
         </div>
@@ -227,9 +211,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeSection, activeQueueId, 
         <>
             <button
                 onClick={() => setMobileOpen(!mobileOpen)}
-                className="md:hidden fixed top-3 left-3 z-[60] p-2 rounded bg-white text-slate-900 shadow-xl border border-slate-100"
+                className="md:hidden fixed top-3 left-3 z-[60] px-3 py-2 rounded-xl bg-white text-sm font-medium text-slate-900 border border-slate-200"
             >
-                {mobileOpen ? <X size={18} /> : <Menu size={18} />}
+                {mobileOpen ? 'Close' : 'Menu'}
             </button>
             {mobileOpen && (
                 <div className="md:hidden fixed inset-0 bg-slate-900/10 z-50" onClick={() => setMobileOpen(false)} />
@@ -247,9 +231,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeSection, activeQueueId, 
                 <SidebarContent />
                 <button
                     onClick={() => setCollapsed(!collapsed)}
-                    className="absolute -right-3 top-20 w-6 h-6 rounded-full bg-white border border-slate-100 flex items-center justify-center shadow-md hover:bg-slate-50 transition-colors z-40"
+                    className="absolute -right-3 top-20 w-6 h-6 rounded-lg bg-white border border-slate-200 flex items-center justify-center text-[10px] text-slate-500 hover:bg-slate-50 z-40"
+                    aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
                 >
-                    <ChevronRight size={10} className={cn("text-slate-300 transition-transform duration-300", collapsed && "rotate-180")} />
+                    {collapsed ? '>' : '<'}
                 </button>
             </aside>
             <div className={cn("hidden md:block shrink-0 transition-all duration-300", collapsed ? "w-20" : "w-64")} />
@@ -402,10 +387,10 @@ export const TopBar: React.FC<{ section: string; queueId?: string }> = ({ sectio
     const today = format(new Date(), 'EEEE, MMMM d');
 
     return (
-        <header className="h-12 bg-white/80 backdrop-blur-md border-b border-slate-100 flex items-center px-4 md:px-8 justify-between sticky top-0 z-20 gap-4">
+        <header className="h-14 bg-white border-b border-slate-100 flex items-center px-4 md:px-8 justify-between sticky top-0 z-20 gap-4">
             <div className="min-w-0 shrink">
-                <h2 className="text-xs font-bold text-slate-800 tracking-tight uppercase leading-none truncate">{headerTitle}</h2>
-                <p className="text-[9px] font-bold text-teal-600/50 mt-1 uppercase tracking-widest leading-none">{today}</p>
+                <h2 className="text-sm font-semibold text-slate-800 truncate">{headerTitle}</h2>
+                <p className="text-xs text-teal-700/80 mt-0.5">{today}</p>
             </div>
 
             <div className="flex items-center gap-3 md:gap-5 flex-1 justify-end min-w-0">
@@ -415,14 +400,9 @@ export const TopBar: React.FC<{ section: string; queueId?: string }> = ({ sectio
                     <button
                         type="button"
                         onClick={() => setShowNotifications(!showNotifications)}
-                        className="relative hover:bg-slate-50 p-2 rounded transition-colors border border-transparent hover:border-slate-100"
+                        className="relative hover:bg-slate-50 px-3 py-1.5 rounded-xl text-xs font-medium transition-colors border border-slate-200 text-slate-700"
                     >
-                        <Bell size={14} className={cn('transition-colors', unreadCount > 0 ? 'text-teal-600' : 'text-slate-300')} />
-                        {unreadCount > 0 && (
-                            <span className="absolute -top-0.5 -right-0.5 w-3.5 h-3.5 bg-rose-500 rounded-full text-[8px] flex items-center justify-center text-white font-black">
-                                {unreadCount}
-                            </span>
-                        )}
+                        Alerts{unreadCount > 0 ? ` (${unreadCount})` : ''}
                     </button>
                     {showNotifications && (
                         <>

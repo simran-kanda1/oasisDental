@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { doc, updateDoc } from 'firebase/firestore';
 import { sendPasswordResetEmail, updateProfile } from 'firebase/auth';
-import { Settings, Shield } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { auth, db } from '../lib/firebase';
 import { Button } from '../components/ui/button';
@@ -50,7 +49,6 @@ const SettingsPage: React.FC = () => {
     <div className="p-4 space-y-4 max-w-xl mx-auto bg-[#f1f5f9] min-h-screen font-sans">
       <div className="bg-white border border-slate-200 rounded-md p-4 flex items-center gap-4">
         <div className="w-10 h-10 rounded bg-slate-800 flex items-center justify-center">
-          <Settings className="text-white" size={20} />
         </div>
         <div>
           <h1 className="text-xl font-bold text-slate-900 tracking-tight">Settings</h1>
@@ -78,7 +76,6 @@ const SettingsPage: React.FC = () => {
 
         <div>
           <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Email</label>
-          <Input value={user?.email ?? ''} disabled className="mt-1.5 h-9 bg-slate-50 text-slate-600" />
           <p className="text-[10px] text-slate-400 mt-1">Email is managed by your login account and cannot be changed here.</p>
         </div>
 
@@ -90,7 +87,6 @@ const SettingsPage: React.FC = () => {
               isAdmin ? 'border-teal-200 bg-teal-50 text-teal-800' : 'border-slate-200 bg-slate-50 text-slate-600'
             )}
           >
-            <Shield size={14} />
             {roleLabel}
           </div>
           <p className="text-[10px] text-slate-400 mt-1">

@@ -1,10 +1,10 @@
 import type { DentrixAppointmentDoc } from './dentrix';
 
 /** Firestore appointments listener limit — raised from 5000 for older qualifying visits. */
-export const APPOINTMENTS_QUERY_LIMIT = 10000;
+export const APPOINTMENTS_QUERY_LIMIT = 6000;
 
 /** Dedicated upcoming-appointments listener so future hygiene/ortho visits are never dropped. */
-export const FUTURE_APPOINTMENTS_QUERY_LIMIT = 5000;
+export const FUTURE_APPOINTMENTS_QUERY_LIMIT = 3000;
 
 /** New patient follow-up: hide patients whose last qualifying visit was more than this many months ago. */
 export const NEW_PATIENT_MAX_MONTHS = 12;

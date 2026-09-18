@@ -44,9 +44,9 @@ import {
 } from '../lib/estimateTreatment';
 import type { DentrixLedgerTransactionDoc } from '../lib/ledgerTransactions';
 import { FOLLOW_UP_QUEUE_OUTREACH, isOpenOutreachItem } from '../lib/followUpQueues';
-import { Loader2, Search } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { PatientProfileTrigger } from '../components/PatientProfileTrigger';
+import { PageLoadingPanel } from '../components/ui/skeleton';
 import {
   buildDocIdToPatientIdMap,
   buildDocumentEstimateWorkItems,
@@ -68,6 +68,11 @@ import {
   type DentrixDocumentDoc,
   type DocumentEstimateWorkflowStatus,
 } from '../lib/documentEstimates';
+import {
+  buildLedgerEstimateSeeds,
+  fetchRecentLedgerRows,
+  mergeLedgerAndDocumentWorkItems,
+} from '../lib/estimateDiscovery';
 import { fetchAttachmentsForDocIds, fetchPatientsByPatientIds } from '../lib/documentAttachments';
 import { appendTimestampedFollowUpNote } from '../lib/followUpNotes';
 import {
@@ -87,6 +92,7 @@ import {
   type DentrixPatientAppointmentInfoDoc,
   type DentrixPatientDoc,
 } from '../lib/dentrix';
+import { useInfiniteList } from '../hooks/useInfiniteList';
 export type EstimateFollowUpHubTab = 'pred_approved' | 'pred_follow_up';
 
 export interface FollowUpOutreachPageProps {
@@ -155,6 +161,8 @@ interface DocumentEstimateRow {
   snoozeUntil?: string;
   bookedApptDate?: string;
   estimateSentLabel?: string | null;
+  /** Epoch ms for Estimate Sent column — list sorts newest first. */
+  estimateSentAtMs?: number | null;
 }
 
 interface UndoCloseState {
@@ -174,6 +182,7 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
   const [tab, setTab] = useState<EstimateFollowUpHubTab>(initialTab);
   const [patientInfoById, setPatientInfoById] = useState<Record<string, DentrixPatientAppointmentInfoDoc>>({});
   const [documents, setDocuments] = useState<DentrixDocumentDoc[]>([]);
+  const [recentLedgerRows, setRecentLedgerRows] = useState<DentrixLedgerTransactionDoc[]>([]);
   const [attachments, setAttachments] = useState<DentrixDocumentAttachmentDoc[]>([]);
   const [patientsById, setPatientsById] = useState<Record<string, DentrixPatientDoc>>({});
   const [followUpByDocId, setFollowUpByDocId] = useState<Record<string, Record<string, unknown>>>({});
@@ -196,7 +205,6 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
   const [bookedDateDraft, setBookedDateDraft] = useState<Record<string, string>>({});
   const [snoozeDraft, setSnoozeDraft] = useState<Record<string, string>>({});
   const [saveNotice, setSaveNotice] = useState<{ id: string; message: string } | null>(null);
-  const [page, setPage] = useState(1);
   const [pendingRemovalIds, setPendingRemovalIds] = useState<Set<string>>(() => new Set());
   const [undoClose, setUndoClose] = useState<UndoCloseState | null>(null);
   const undoTimerRef = useRef<number | null>(null);
@@ -216,7 +224,7 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
 
   useEffect(() => {
     setLoading(true);
-    let pending = 2;
+    let pending = 3;
     let cancelled = false;
     const done = () => {
       pending -= 1;
@@ -236,8 +244,22 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
         console.error('documents fetch failed', err);
         if (!cancelled) {
           setDocuments([]);
-          setDocumentsLoadError(err instanceof Error ? err.message : 'Could not load documents from Firestore.');
+          setDocumentsLoadError(err instanceof Error ? err.message : 'Could not load estimate paperwork.');
         }
+      })
+      .finally(() => {
+        done();
+      });
+
+    void fetchRecentLedgerRows(db)
+      .then((rows) => {
+        if (!cancelled) {
+          startTransition(() => setRecentLedgerRows(rows));
+        }
+      })
+      .catch((err) => {
+        console.error('recent ledger fetch failed', err);
+        if (!cancelled) setRecentLedgerRows([]);
       })
       .finally(() => {
         done();
@@ -300,8 +322,21 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
     return map;
   }, [documents, docIdToPatientId]);
 
+  const claimsByPatientId = useMemo(() => buildClaimsByPatientId(insuranceClaims), [insuranceClaims]);
+
+  const insuredByGuid = useMemo(() => buildInsuredByPatientGuidMap(insuredRows), [insuredRows]);
+
+  const adaByProccodeId = useMemo(() => buildAdaByProccodeId(procedureCodes), [procedureCodes]);
+
+  const ledgerSeeds = useMemo(
+    () => buildLedgerEstimateSeeds(recentLedgerRows, adaByProccodeId),
+    [recentLedgerRows, adaByProccodeId]
+  );
+
   useEffect(() => {
-    const patientIds = [...new Set(docIdToPatientId.values())];
+    const patientIds = [
+      ...new Set([...docIdToPatientId.values(), ...ledgerSeeds.map((s) => s.patientId)]),
+    ];
     if (patientIds.length === 0) {
       setPatientsById({});
       return;
@@ -313,20 +348,25 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
     return () => {
       cancelled = true;
     };
-  }, [docIdToPatientId]);
+  }, [docIdToPatientId, ledgerSeeds]);
 
-  const claimsByPatientId = useMemo(() => buildClaimsByPatientId(insuranceClaims), [insuranceClaims]);
-
-  const insuredByGuid = useMemo(() => buildInsuredByPatientGuidMap(insuredRows), [insuredRows]);
-
-  const adaByProccodeId = useMemo(() => buildAdaByProccodeId(procedureCodes), [procedureCodes]);
-
-  const documentWorkItems = useMemo(
+  const documentOnlyWorkItems = useMemo(
     () =>
       buildDocumentEstimateWorkItems(documents, docIdToPatientId, patientsById, {
         lookback: 'all',
       }),
     [documents, docIdToPatientId, patientsById]
+  );
+
+  const documentWorkItems = useMemo(
+    () =>
+      mergeLedgerAndDocumentWorkItems({
+        ledgerSeeds,
+        documentItems: documentOnlyWorkItems,
+        documentsByPatientId,
+        patientsById,
+      }),
+    [ledgerSeeds, documentOnlyWorkItems, documentsByPatientId, patientsById]
   );
 
   useEffect(() => {
@@ -535,6 +575,7 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
       documentStatus: d.workflowStatus,
       nextApptInSystem: nextAppointmentByPatientId[d.patientId] ?? '—',
       estimateSentLabel,
+      estimateSentAtMs: visitSent?.at?.getTime() ?? null,
       procedureContext,
       codeTypeFilterId: primaryCodeTypeFilterId(procedureContext),
       outcome: fu ? String(fu.outcome ?? '') : undefined,
@@ -635,31 +676,46 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
   const activeTabSearchTrimmed = activeTabSearch.trim();
   const activeTabRowsBeforeSearch = tab === 'pred_approved' ? predApprovedRows : predFollowUpRows;
 
-  useEffect(() => {
-    setPage(1);
-  }, [tab, activeTabSearch, codeTypeFilter, ageBucket, groupByCodeType]);
+  const infiniteResetKey = `${tab}|${activeTabSearch}|${codeTypeFilter}|${ageBucket}|${groupByCodeType}`;
+  const {
+    total: totalDisplayedRows,
+    visibleItems: visibleRows,
+    hasMore,
+    sentinelRef,
+  } = useInfiniteList(displayedTabRows, ESTIMATE_PAGE_SIZE, infiniteResetKey);
 
-  const totalDisplayedRows = displayedTabRows.length;
-  const totalPages = Math.max(1, Math.ceil(totalDisplayedRows / ESTIMATE_PAGE_SIZE));
-  const safePage = Math.min(page, totalPages);
-  const pageStartIndex = (safePage - 1) * ESTIMATE_PAGE_SIZE;
-  const visibleRows = useMemo(
-    () => displayedTabRows.slice(pageStartIndex, pageStartIndex + ESTIMATE_PAGE_SIZE),
-    [displayedTabRows, pageStartIndex]
+  const allOpenPatientIds = useMemo(
+    () => [
+      ...new Set([
+        ...predApprovedRows.map((r) => r.patientId),
+        ...predFollowUpRows.map((r) => r.patientId),
+      ]),
+    ],
+    [predApprovedRows, predFollowUpRows]
   );
 
-  useEffect(() => {
-    if (page !== safePage) setPage(safePage);
-  }, [page, safePage]);
+  const ledgerPatientIds = allOpenPatientIds;
 
   useEffect(() => {
-    document.querySelector('main')?.scrollTo({ top: 0, behavior: 'smooth' });
-  }, [safePage, tab]);
-
-  const ledgerPatientIds = useMemo(
-    () => [...new Set(visibleRows.map((r) => r.patientId))],
-    [visibleRows]
-  );
+    if (!recentLedgerRows.length) return;
+    setLedgerByPatientId((prev) => {
+      const next = new Map(prev);
+      const grouped = new Map<number, DentrixLedgerTransactionDoc[]>();
+      for (const row of recentLedgerRows) {
+        const patid = Number(row.patid);
+        if (!Number.isFinite(patid)) continue;
+        const list = grouped.get(patid) ?? [];
+        list.push(row);
+        grouped.set(patid, list);
+      }
+      grouped.forEach((rows, patid) => {
+        if (!next.has(patid)) {
+          next.set(patid, filterLedgerRowsWithinMonths(rows, ESTIMATE_LEDGER_LOOKBACK_MONTHS));
+        }
+      });
+      return next;
+    });
+  }, [recentLedgerRows]);
 
   useEffect(() => {
     const missing = ledgerPatientIds.filter((id) => !ledgerByPatientId.has(Number(id)));
@@ -1041,7 +1097,7 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
           <span className="text-slate-400">—</span>
           {ledgerLoading && (
             <p className="text-[9px] text-slate-400 inline-flex items-center gap-1">
-              <Loader2 className="h-3 w-3 animate-spin" />
+              <span className="text-[10px] text-slate-500">…</span>
               Loading ledger…
             </p>
           )}
@@ -1346,43 +1402,18 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
     );
   };
 
-  const renderPagination = (totalCount: number) => {
+  const renderListFooter = (totalCount: number, shownCount: number) => {
     if (totalCount === 0) return null;
-    const pages = Math.max(1, Math.ceil(totalCount / ESTIMATE_PAGE_SIZE));
-    const currentPage = Math.min(page, pages);
-    const rangeStart = (currentPage - 1) * ESTIMATE_PAGE_SIZE + 1;
-    const rangeEnd = Math.min(currentPage * ESTIMATE_PAGE_SIZE, totalCount);
-
     return (
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pt-4">
-        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">
-          Showing {rangeStart.toLocaleString()}–{rangeEnd.toLocaleString()} of {totalCount.toLocaleString()}
+      <div className="flex flex-col items-center gap-2 pt-4">
+        <p className="text-xs text-slate-500">
+          Showing {shownCount.toLocaleString()} of {totalCount.toLocaleString()}
         </p>
-        <div className="flex items-center gap-2">
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            className="h-8 text-[10px] font-black uppercase"
-            disabled={currentPage <= 1}
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
-          >
-            Previous
-          </Button>
-          <span className="text-[10px] font-bold text-slate-600 tabular-nums px-2">
-            Page {currentPage} of {pages}
-          </span>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            className="h-8 text-[10px] font-black uppercase"
-            disabled={currentPage >= pages}
-            onClick={() => setPage((p) => Math.min(pages, p + 1))}
-          >
-            Next
-          </Button>
-        </div>
+        {hasMore ? (
+          <div ref={sentinelRef} className="h-8 w-full" aria-hidden />
+        ) : (
+          <p className="text-xs text-slate-400">End of list</p>
+        )}
       </div>
     );
   };
@@ -1392,9 +1423,7 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
       <div className="border-b border-slate-100 pb-6">
         <h1 className="text-2xl md:text-3xl font-black text-slate-900 tracking-tight uppercase">Estimate follow-up</h1>
         <p className="text-[11px] font-bold text-slate-500 mt-2 max-w-3xl">
-          Predetermination and estimate paperwork from Document Center. The tabs are only open work — category counts
-          below show every loaded document type, including claim acknowledgments and explanation of benefits that are
-          not listed as their own rows.
+          Open estimate and predetermination follow-up. Scroll to load more; the total count always includes every open item.
         </p>
       </div>
 
@@ -1421,7 +1450,7 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
               }`}
             >
               {isPageLoading ? (
-                <Loader2 className="h-3 w-3 animate-spin" aria-label="Loading" />
+                <span className="text-[10px] text-slate-500" aria-label="Loading">Loading…</span>
               ) : id === 'pred_approved' ? (
                 filteredApproved.length
               ) : (
@@ -1480,7 +1509,7 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Document categories</p>
           <p className="text-[10px] font-bold text-slate-400">
-            {documents.length.toLocaleString()} loaded · treatment age: {ageBucketLabel}
+            {ageBucketLabel}
           </p>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2">
@@ -1520,28 +1549,23 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
 
       {documentsLoadError ? (
         <div className="rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
-          Could not load documents: {documentsLoadError}. If this mentions an index, create it in the Firebase console
-          or run <code className="text-xs">firebase deploy --only firestore:indexes</code>.
+          Could not load estimates: {documentsLoadError}. Please refresh the page or try again in a moment.
         </div>
       ) : null}
 
       {isPageLoading ? (
-        <div className="p-24 flex flex-col items-center justify-center gap-3 text-[10px] font-black text-slate-400 uppercase tracking-widest">
-          <Loader2 className="h-8 w-8 animate-spin text-teal-600" />
-          Loading estimates…
-        </div>
+        <PageLoadingPanel message="Loading estimates…" />
       ) : (
         <>
           {isRowsStale ? (
             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide flex items-center gap-2 -mt-4 mb-2">
-              <Loader2 className="h-3 w-3 animate-spin" />
+              <span className="text-[10px] text-slate-500">…</span>
               Updating list…
             </p>
           ) : null}
           <div className="rounded-lg border border-slate-200 bg-white p-4 space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center gap-3">
               <div className="relative flex-1 max-w-xl">
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                 <Input
                   placeholder={
                     tab === 'pred_approved'
@@ -1605,7 +1629,7 @@ const FollowUpOutreachPage: React.FC<FollowUpOutreachPageProps> = ({ initialTab 
                     ? 'No acknowledgment rows match your search'
                     : 'No pre-d acknowledgment documents to follow up'
                 )}
-            {renderPagination(totalDisplayedRows)}
+            {renderListFooter(totalDisplayedRows, visibleRows.length)}
           </div>
         </>
       )}

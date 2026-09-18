@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Search, User, X } from 'lucide-react';
 import { searchPatients, type PatientSearchResult } from '../lib/patientSearch';
 import { usePatientProfile } from '../contexts/PatientProfileContext';
 import { Skeleton } from './ui/skeleton';
@@ -46,27 +45,16 @@ export const GlobalPatientSearch: React.FC = () => {
 
   useEffect(() => {
     if (!open) return;
-    const t = setTimeout(() => inputRef.current?.focus(), 50);
-    const onPointerDown = (e: MouseEvent) => {
-      const target = e.target as Node;
-      if (panelRef.current?.contains(target)) return;
-      close();
-    };
-    document.addEventListener('mousedown', onPointerDown);
-    return () => {
-      clearTimeout(t);
-      document.removeEventListener('mousedown', onPointerDown);
-    };
-  }, [open, close]);
+    const t = window.setTimeout(() => inputRef.current?.focus(), 50);
+    return () => window.clearTimeout(t);
+  }, [open]);
 
   useEffect(() => {
-    if (!open) {
-      setQuery('');
-      setResults([]);
-      return;
-    }
+    if (!open) return;
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => void runSearch(query), 280);
+    debounceRef.current = setTimeout(() => {
+      void runSearch(query);
+    }, 220);
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
@@ -82,56 +70,54 @@ export const GlobalPatientSearch: React.FC = () => {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="hidden sm:flex items-center gap-2 h-8 px-3 rounded-md border border-slate-200 bg-slate-50/80 text-slate-500 hover:border-teal-200 hover:bg-white transition-colors min-w-[200px] lg:min-w-[260px]"
+        className="hidden sm:flex items-center gap-2 h-9 px-3 rounded-xl border border-slate-200 bg-slate-50 text-slate-600 hover:border-teal-300 hover:bg-white transition-colors min-w-[200px] lg:min-w-[260px]"
       >
-        <Search size={14} className="shrink-0 text-slate-400" />
-        <span className="text-[10px] font-bold uppercase tracking-tight flex-1 text-left">Search patients</span>
-        <kbd className="text-[8px] font-bold text-slate-400 border border-slate-200 rounded px-1.5 py-0.5 bg-white">⌘K</kbd>
+        <span className="text-xs font-medium flex-1 text-left">Search patients</span>
+        <kbd className="text-[10px] text-slate-400 border border-slate-200 rounded-md px-1.5 py-0.5 bg-white">⌘K</kbd>
       </button>
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="sm:hidden p-2 rounded-md border border-slate-200 text-slate-500 hover:bg-slate-50"
-        aria-label="Search patients"
+        className="sm:hidden px-3 py-1.5 rounded-xl border border-slate-200 text-xs font-medium text-slate-600"
       >
-        <Search size={16} />
+        Search
       </button>
 
       {open && (
-        <div className="fixed inset-0 z-[300] flex items-start justify-center pt-[10vh] px-4 pointer-events-none">
+        <div className="fixed inset-0 z-[300] flex items-start justify-center pt-[10vh] px-4">
+          <button type="button" className="absolute inset-0 bg-slate-900/20" aria-label="Close" onClick={close} />
           <div
             ref={panelRef}
-            className="pointer-events-auto w-full max-w-lg rounded-md border border-slate-200 bg-white shadow-2xl overflow-hidden"
+            className="relative w-full max-w-lg rounded-2xl border border-slate-200 bg-white overflow-hidden"
             role="dialog"
             aria-modal="true"
             aria-label="Search patients"
           >
             <div className="flex items-center gap-2 px-3 border-b border-slate-200">
-              <Search size={16} className="text-slate-400 shrink-0" />
               <input
                 ref={inputRef}
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Name, patient ID, phone, or email…"
-                className="flex-1 h-11 text-sm outline-none bg-transparent placeholder:text-slate-400"
+                className="flex-1 h-12 text-sm outline-none bg-transparent placeholder:text-slate-400"
               />
-              <Button type="button" variant="ghost" size="sm" className="h-8 w-8 p-0 shrink-0" onClick={close} aria-label="Close search">
-                <X size={16} />
+              <Button type="button" variant="ghost" size="sm" className="h-8 rounded-lg shrink-0" onClick={close}>
+                Close
               </Button>
             </div>
             <div className="max-h-[360px] overflow-y-auto">
               {loading && (
                 <div className="p-3 space-y-2">
                   {Array.from({ length: 4 }).map((_, i) => (
-                    <Skeleton key={i} className="h-10 w-full" />
+                    <Skeleton key={i} className="h-10 w-full rounded-lg" />
                   ))}
                 </div>
               )}
               {!loading && query.trim().length < 2 && (
-                <p className="p-6 text-center text-[11px] text-slate-500">Type at least 2 characters — searches all patients</p>
+                <p className="p-6 text-center text-sm text-slate-500">Type at least 2 characters</p>
               )}
               {!loading && query.trim().length >= 2 && results.length === 0 && (
-                <p className="p-6 text-center text-[11px] text-slate-500">No patients found</p>
+                <p className="p-6 text-center text-sm text-slate-500">No patients found</p>
               )}
               {!loading &&
                 results.map((row) => (
@@ -139,22 +125,16 @@ export const GlobalPatientSearch: React.FC = () => {
                     key={row.firestoreId}
                     type="button"
                     onClick={() => pick(row)}
-                    className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-teal-50 border-b border-slate-100 last:border-0"
+                    className="w-full px-4 py-3 text-left hover:bg-teal-50 border-b border-slate-100 last:border-0"
                   >
-                    <div className="w-8 h-8 rounded-md bg-slate-100 flex items-center justify-center shrink-0">
-                      <User size={14} className="text-slate-400" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-bold text-slate-900 truncate">{row.name}</p>
-                      <p className="text-[10px] text-slate-500 truncate">
-                        ID {row.patientId}
-                        {row.phone ? ` · ${row.phone}` : ''}
-                      </p>
-                    </div>
+                    <p className="text-sm font-medium text-slate-900 truncate">{row.name}</p>
+                    <p className="text-xs text-slate-500 truncate">
+                      ID {row.patientId}
+                      {row.phone ? ` · ${row.phone}` : ''}
+                    </p>
                   </button>
                 ))}
             </div>
-            <p className="px-3 py-2 text-[9px] text-slate-400 border-t border-slate-100">Click outside or press Esc to close</p>
           </div>
         </div>
       )}

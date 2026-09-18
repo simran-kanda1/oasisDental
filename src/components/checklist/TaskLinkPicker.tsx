@@ -1,5 +1,4 @@
 import React from 'react';
-import { ExternalLink } from 'lucide-react';
 import { Button } from '../ui/button';
 import { applyTaskLinkTarget, type TaskLinkTarget } from '../../lib/taskLinks';
 
@@ -32,7 +31,6 @@ export const TaskLinkPicker: React.FC<TaskLinkPickerProps> = ({ open, taskTitle,
               }}
             >
               {target.label}
-              <ExternalLink className="w-3.5 h-3.5 shrink-0" />
             </Button>
           ))}
         </div>

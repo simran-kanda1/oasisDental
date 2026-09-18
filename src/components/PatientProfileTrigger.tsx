@@ -11,7 +11,7 @@ type Props = {
 };
 
 /**
- * Clickable patient block — opens quick profile (phone, address, notes) from Firestore.
+ * Clickable patient name — opens quick profile (phone, address, notes).
  */
 export const PatientProfileTrigger: React.FC<Props> = ({ patientId, className, disabled, children }) => {
     const { openPatient } = usePatientProfile();

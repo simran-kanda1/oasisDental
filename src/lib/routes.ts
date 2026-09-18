@@ -22,8 +22,6 @@ export function sectionToPath(section: AppSection, queueId?: string): string {
       return '/admin';
     case 'settings':
       return '/settings';
-    case 'weave':
-      return '/weave';
     default:
       return '/dashboard';
   }
@@ -45,7 +43,6 @@ export function pathToSection(pathname: string): { section: AppSection; queueId?
   if (path === '/inquiries') return { section: 'inquiries' };
   if (path === '/admin') return { section: 'admin' };
   if (path === '/settings') return { section: 'settings' };
-  if (path === '/weave') return { section: 'weave' };
   return { section: 'dashboard' };
 }
 

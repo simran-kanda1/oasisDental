@@ -1,6 +1,5 @@
 import React from 'react';
 import { format } from 'date-fns';
-import { MessageSquare } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { Badge } from '../ui/badge';
 import { TASK_GROUP_LABELS, type TaskGroupId } from '../../lib/taskGroups';
@@ -156,7 +155,6 @@ export const ChecklistBoard: React.FC<ChecklistBoardProps> = ({
                       className="p-1.5 rounded hover:bg-teal-50 text-slate-400 hover:text-teal-600"
                       aria-label="Add note"
                     >
-                      <MessageSquare size={14} />
                     </button>
                   </td>
                 </tr>

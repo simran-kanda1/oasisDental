@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { collection, onSnapshot, orderBy, query, limit, where } from 'firebase/firestore';
+import { collection, getDocs, onSnapshot, orderBy, query, limit, where } from 'firebase/firestore';
 import { format, startOfDay } from 'date-fns';
 import { db } from '../lib/firebase';
 import { APPOINTMENTS_QUERY_LIMIT, FUTURE_APPOINTMENTS_QUERY_LIMIT, mergeAppointmentsById } from '../lib/appointmentsQuery';
@@ -18,7 +18,11 @@ export interface FrontDeskDataState {
   trackingByApptId: Record<string, QueueRowTrackingDoc>;
   ledgerByPatientId: Map<number, DentrixLedgerTransactionDoc[]>;
   appointmentsLoading: boolean;
+  /** True until the first patient_appointment_info snapshot arrives. */
+  patientInfoLoading: boolean;
   ledgerLoading: boolean;
+  /** Appointments + patient info ready for queue / recall screens. */
+  coreDataLoading: boolean;
 }
 
 const defaultState: FrontDeskDataState = {
@@ -29,7 +33,9 @@ const defaultState: FrontDeskDataState = {
   trackingByApptId: {},
   ledgerByPatientId: new Map(),
   appointmentsLoading: true,
+  patientInfoLoading: true,
   ledgerLoading: false,
+  coreDataLoading: true,
 };
 
 const FrontDeskDataContext = createContext<FrontDeskDataState>(defaultState);
@@ -45,6 +51,7 @@ export const FrontDeskDataProvider: React.FC<{ children: React.ReactNode }> = ({
     new Map()
   );
   const [appointmentsLoading, setAppointmentsLoading] = useState(true);
+  const [patientInfoLoading, setPatientInfoLoading] = useState(true);
   const [ledgerLoading, setLedgerLoading] = useState(false);
 
   const allAppointments = useMemo(
@@ -85,8 +92,10 @@ export const FrontDeskDataProvider: React.FC<{ children: React.ReactNode }> = ({
         map[String(row.patient_id ?? row.id)] = row;
       });
       setPatientInfoById(map);
+      setPatientInfoLoading(false);
     });
-    const unsubProc = onSnapshot(collection(db, 'procedure_codes'), (snap) => {
+    // Procedure codes change rarely — one-shot load (avoids a permanent full-collection listener).
+    void getDocs(collection(db, 'procedure_codes')).then((snap) => {
       setProcedureCodes(snap.docs.map((d) => ({ id: d.id, ...d.data() } as DentrixProcedureCodeDoc)));
     });
     const unsubTracking = onSnapshot(collection(db, QUEUE_ROW_TRACKING_COLLECTION), (snap) => {
@@ -101,7 +110,6 @@ export const FrontDeskDataProvider: React.FC<{ children: React.ReactNode }> = ({
       unsubFuture();
       unsubP();
       unsubInfo();
-      unsubProc();
       unsubTracking();
     };
   }, []);
@@ -142,6 +150,8 @@ export const FrontDeskDataProvider: React.FC<{ children: React.ReactNode }> = ({
     };
   }, [allAppointments]);
 
+  const coreDataLoading = appointmentsLoading || patientInfoLoading;
+
   const value = useMemo<FrontDeskDataState>(
     () => ({
       allAppointments,
@@ -151,7 +161,9 @@ export const FrontDeskDataProvider: React.FC<{ children: React.ReactNode }> = ({
       trackingByApptId,
       ledgerByPatientId,
       appointmentsLoading,
+      patientInfoLoading,
       ledgerLoading,
+      coreDataLoading,
     }),
     [
       allAppointments,
@@ -161,7 +173,9 @@ export const FrontDeskDataProvider: React.FC<{ children: React.ReactNode }> = ({
       trackingByApptId,
       ledgerByPatientId,
       appointmentsLoading,
+      patientInfoLoading,
       ledgerLoading,
+      coreDataLoading,
     ]
   );
 

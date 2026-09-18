@@ -471,7 +471,7 @@ const AdminPortalPage: React.FC = () => {
                         ))}
                     </div>
                     <div className="bg-white border border-slate-200 rounded-md p-4">
-                        <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">Last Dentrix sync</p>
+                        <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">Last patient data update</p>
                         <p className="text-sm font-medium text-slate-800 mt-1 break-all">{lastSyncedAt}</p>
                     </div>
                     <div className="bg-white border border-slate-200 rounded-md p-4">
@@ -490,7 +490,7 @@ const AdminPortalPage: React.FC = () => {
                                 <span className="font-bold">{qualityStats.appointmentsMissingProvider}</span>
                             </div>
                             <div className="flex justify-between border-b border-slate-100 pb-2">
-                                <span className="text-slate-600">Stale sync (&gt;7d)</span>
+                                <span className="text-slate-600">Outdated records (&gt;7d)</span>
                                 <span className="font-bold">{qualityStats.stalePatientSyncRecords}</span>
                             </div>
                         </div>
@@ -515,7 +515,7 @@ const AdminPortalPage: React.FC = () => {
                         <Card className="p-8 border-slate-100 rounded-[2rem] shadow-xl animate-in slide-in-from-top-4 duration-300">
                             <form onSubmit={handleAddRecurring} className="space-y-6">
                                 <div className="space-y-2">
-                                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1 opacity-60">Node Title</label>
+                                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1 opacity-60">Title</label>
                                     <Input placeholder="Enter protocol details..." value={newRecurring.title} onChange={e => setNewRecurring({ ...newRecurring, title: e.target.value })} className="h-12 text-sm font-bold border-slate-100 bg-slate-50/50 rounded-2xl focus:bg-white focus:ring-teal-500/10 transition-all" required />
                                 </div>
                                 <div className="grid grid-cols-2 gap-4">
@@ -526,7 +526,7 @@ const AdminPortalPage: React.FC = () => {
                                         </select>
                                     </div>
                                     <div className="space-y-2">
-                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1 opacity-60">Day Signal</label>
+                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1 opacity-60">Day</label>
                                         <select value={newRecurring.day} onChange={e => setNewRecurring({ ...newRecurring, day: parseInt(e.target.value) })} className="w-full h-12 border border-slate-100 bg-slate-50/50 rounded-2xl text-[11px] font-black uppercase tracking-tight px-4 focus:bg-white focus:border-teal-300 transition-all outline-none">
                                             {[1, 2, 3, 4, 5, 6].map(d => <option key={d} value={d}>Day {d}</option>)}
                                         </select>

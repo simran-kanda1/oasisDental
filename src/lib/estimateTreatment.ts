@@ -408,17 +408,30 @@ export function autoCloseCompletedEstimatePatch(by: string): Record<string, unkn
   };
 }
 
-/** Dedupe estimate rows — one open row per patient + code type group (newest document wins). */
-export function dedupeEstimateRows<T extends { patientId: string; codeTypeFilterId: string; docId: number }>(
-  rows: T[]
-): T[] {
+/** Dedupe estimate rows — one open row per patient + code type group (newest estimate sent wins). */
+export function dedupeEstimateRows<
+  T extends { patientId: string; codeTypeFilterId: string; docId: number; estimateSentAtMs?: number | null }
+>(rows: T[]): T[] {
   const byKey = new Map<string, T>();
   for (const row of rows) {
     const key = `${row.patientId}::${row.codeTypeFilterId}`;
     const prev = byKey.get(key);
-    if (!prev || row.docId > prev.docId) byKey.set(key, row);
+    if (!prev) {
+      byKey.set(key, row);
+      continue;
+    }
+    const prevSent = Number(prev.estimateSentAtMs) || 0;
+    const nextSent = Number(row.estimateSentAtMs) || 0;
+    if (nextSent > prevSent || (nextSent === prevSent && row.docId > prev.docId)) {
+      byKey.set(key, row);
+    }
   }
-  return Array.from(byKey.values()).sort((a, b) => b.docId - a.docId);
+  return Array.from(byKey.values()).sort((a, b) => {
+    const aSent = Number(a.estimateSentAtMs) || 0;
+    const bSent = Number(b.estimateSentAtMs) || 0;
+    if (bSent !== aSent) return bSent - aSent;
+    return b.docId - a.docId;
+  });
 }
 
 export function parseActionHistory(raw: unknown): EstimateActionHistoryEntry[] {

@@ -26,7 +26,6 @@ import {
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { cn } from '../lib/utils';
-import { ChevronLeft, ChevronRight, ListChecks } from 'lucide-react';
 import { navigateToSection } from '../lib/navigation';
 import { logAudit } from '../lib/auditTrail';
 import { ChecklistWeekStrip, type ChecklistTaskRow } from '../components/checklist/ChecklistBoard';
@@ -497,7 +496,6 @@ const StaffTasksPage: React.FC = () => {
                             setSelectedDate(alignDateToMonth(nextMonth, selectedDate));
                         }}
                     >
-                        <ChevronLeft className="w-4 h-4" />
                     </Button>
                     <span className="text-xs font-black text-slate-800 min-w-[120px] text-center uppercase">{format(viewMonth, 'MMMM yyyy')}</span>
                     <Button
@@ -510,7 +508,6 @@ const StaffTasksPage: React.FC = () => {
                             setSelectedDate(alignDateToMonth(nextMonth, selectedDate));
                         }}
                     >
-                        <ChevronRight className="w-4 h-4" />
                     </Button>
                     <Button size="sm" className="h-8 text-[10px] font-bold uppercase bg-teal-600" onClick={() => { const t = new Date(); setViewMonth(startOfMonth(t)); setSelectedDate(t); }}>
                         Jump to today
@@ -521,7 +518,6 @@ const StaffTasksPage: React.FC = () => {
             <div className="rounded-lg border border-teal-100 bg-gradient-to-br from-teal-50/80 to-white p-4 flex flex-col sm:flex-row gap-4 sm:items-center">
                 <div className="flex items-start gap-3 shrink-0">
                     <div className="rounded-lg bg-teal-600 p-2 text-white shadow-sm">
-                        <ListChecks className="w-5 h-5" />
                     </div>
                     <div>
                         <p className="text-xs font-black text-teal-900 uppercase tracking-tight">Daily rhythm</p>

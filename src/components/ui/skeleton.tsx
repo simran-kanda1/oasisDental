@@ -91,10 +91,34 @@ export function AppLoadingSkeleton() {
   );
 }
 
-export function PageLoadingFallback() {
+export function PageLoadingPanel({
+  message = 'Loading…',
+  hint = 'Please wait — no need to refresh.',
+  className,
+}: {
+  message?: string;
+  hint?: string;
+  className?: string;
+}) {
   return (
-    <div className="flex min-h-[min(60vh,32rem)] w-full items-center justify-center p-8">
+    <div
+      className={cn(
+        'flex min-h-[min(50vh,28rem)] w-full flex-col items-center justify-center gap-4 p-10 text-center',
+        className
+      )}
+      role="status"
+      aria-live="polite"
+      aria-busy="true"
+    >
       <AppSpinner />
+      <div className="space-y-1">
+        <p className="text-sm font-bold text-slate-700">{message}</p>
+        {hint ? <p className="text-xs text-slate-500">{hint}</p> : null}
+      </div>
     </div>
   );
+}
+
+export function PageLoadingFallback({ message = 'Loading page…' }: { message?: string } = {}) {
+  return <PageLoadingPanel message={message} />;
 }

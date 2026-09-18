@@ -40,10 +40,11 @@ describe('resolveEstimateSentVisit', () => {
       adaByProccodeId,
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       label: '2026-06-08 · 2:30 PM',
       source: 'appointment',
     });
+    expect(result?.at).toBeInstanceOf(Date);
   });
 
   it('falls back to ledger procdate when no appointment matches', () => {
@@ -63,7 +64,7 @@ describe('resolveEstimateSentVisit', () => {
       adaByProccodeId,
     });
 
-    expect(result).toEqual({ label: '2026-06-08', source: 'ledger' });
+    expect(result).toMatchObject({ label: '2026-06-08', source: 'ledger' });
   });
 
   it('uses the document date when the document itself proves an estimate went out', () => {
@@ -75,6 +76,6 @@ describe('resolveEstimateSentVisit', () => {
       adaByProccodeId,
     });
 
-    expect(result).toEqual({ label: '2026-06-20', source: 'document' });
+    expect(result).toMatchObject({ label: '2026-06-20', source: 'document' });
   });
 });

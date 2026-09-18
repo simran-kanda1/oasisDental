@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { useInfiniteList } from '../hooks/useInfiniteList';
 import { collection, doc, onSnapshot, updateDoc } from 'firebase/firestore';
 import { format } from 'date-fns';
-import { Loader2, MessageSquare, Search, Trash2 } from 'lucide-react';
 import { db } from '../lib/firebase';
 import type { WixInquiry } from '../types';
 import { useAuth } from '../contexts/AuthContext';
@@ -160,6 +160,12 @@ const InquiriesPage: React.FC = () => {
     () => displayRows.filter((row) => inquiryMatchesSearch(row, search)),
     [displayRows, search]
   );
+  const {
+    total: inquiryListTotal,
+    visibleItems: visibleInquiryRows,
+    hasMore: inquiryHasMore,
+    sentinelRef: inquirySentinelRef,
+  } = useInfiniteList(filteredRows, 40, search);
   const searchTrimmed = search.trim();
   const activeLeadCount = useMemo(
     () => newLeadInquiries.filter(inquiryIsOpen).length,
@@ -229,12 +235,9 @@ const InquiriesPage: React.FC = () => {
     <div className="p-4 space-y-4 max-w-full mx-auto bg-[#f1f5f9] min-h-screen font-sans">
       <div className="bg-white border border-slate-200 rounded-md p-4 flex flex-col md:flex-row items-center justify-between gap-4">
         <div className="flex items-center gap-4">
-          <div className="w-10 h-10 rounded bg-teal-600 flex items-center justify-center shadow-lg shadow-teal-600/10">
-            <MessageSquare className="text-white" size={20} />
-          </div>
           <div>
-            <h1 className="text-xl font-bold text-slate-900 tracking-tight">Patient Inquiries</h1>
-            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">
+            <h1 className="text-xl font-semibold text-slate-900 tracking-tight">Patient Inquiries</h1>
+            <p className="text-xs text-slate-500 mt-0.5">
               Website leads — duplicates collapsed by phone
             </p>
           </div>
@@ -267,9 +270,7 @@ const InquiriesPage: React.FC = () => {
       {loading ? (
         <div className="space-y-4">
           <PageHeaderSkeleton />
-          <div className="flex justify-center py-16">
-            <Loader2 className="h-8 w-8 animate-spin text-teal-600" />
-          </div>
+          <p className="text-center py-16 text-sm text-slate-500">Loading inquiries…</p>
         </div>
       ) : displayRows.length === 0 ? (
         <div className="p-16 text-center bg-white rounded-md border border-slate-200 text-sm text-slate-500">
@@ -277,18 +278,17 @@ const InquiriesPage: React.FC = () => {
             ? hiddenInquiries.length > 0 && !showExistingPatients
               ? `${hiddenInquiries.length} recent inquir${hiddenInquiries.length === 1 ? 'y is' : 'ies are'} from phones already on file — enable “existing patients” above to review.`
               : 'No open inquiries to show.'
-            : 'No inquiries yet. New website submissions appear here automatically (synced every 5 minutes).'}
+            : 'No inquiries yet. New website form submissions will show up here automatically.'}
         </div>
       ) : (
         <div className="rounded-md border border-slate-200 bg-white p-4 space-y-4 shadow-sm">
           <div className="flex flex-col sm:flex-row sm:items-center gap-3">
             <div className="relative flex-1 max-w-xl">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
               <Input
                 placeholder="Search this section: name, phone, email, service, message, notes…"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className="h-10 pl-9 text-xs font-bold border-slate-200"
+                className="h-10 pl-3 text-xs font-medium border-slate-200 rounded-xl"
                 aria-label="Search inquiries"
               />
             </div>
@@ -296,7 +296,7 @@ const InquiriesPage: React.FC = () => {
               {searchTrimmed ? (
                 <>
                   <span className="text-[10px] font-bold text-slate-500 tabular-nums">
-                    {filteredRows.length} of {displayRows.length} in this section
+                    {inquiryListTotal} of {displayRows.length} in this section
                   </span>
                   <Button
                     type="button"
@@ -317,135 +317,133 @@ const InquiriesPage: React.FC = () => {
           </div>
 
           {filteredRows.length === 0 ? (
-            <div className="p-12 text-center border border-dashed border-slate-200 rounded-md text-sm text-slate-500">
+            <div className="p-12 text-center border border-dashed border-slate-200 rounded-xl text-sm text-slate-500">
               No inquiries match your search.
             </div>
           ) : (
-        <div className="overflow-hidden overflow-x-auto max-h-[calc(100vh-16rem)] overflow-y-auto border border-slate-200 rounded-md">
-          <table className="w-full text-left text-sm min-w-[1100px]">
-            <thead className="sticky top-0 z-10 bg-slate-50 border-b border-slate-200 text-[10px] font-black uppercase tracking-widest text-slate-500">
-              <tr>
-                <th className="p-3 pl-4">Name</th>
-                <th className="p-3">Phone</th>
-                <th className="p-3">Email</th>
-                <th className="p-3">Service</th>
-                <th className="p-3 min-w-[180px]">Message</th>
-                <th className="p-3 min-w-[200px]">Staff notes</th>
-                <th className="p-3">Submitted</th>
-                <th className="p-3">Status</th>
-                <th className="p-3 pr-4 min-w-[220px]">Why not booked</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {filteredRows.map((inquiry) => {
-                const noteVal = notesDraft[inquiry.id] ?? inquiry.staffNotes ?? '';
-                const closeReason = closeReasonDraft[inquiry.id] ?? inquiry.notBookedReason ?? '';
-                const busy = updatingId === inquiry.id;
-                return (
-                  <tr
-                    key={inquiry.id}
-                    className="align-top hover:bg-slate-50/80"
-                  >
-                    <td className="p-3 pl-4 font-bold text-slate-900">
-                      {inquiry.name}
-                      {inquiry.duplicateCount ? (
-                        <span className="ml-1 text-[9px] font-bold text-amber-600 uppercase">
-                          +{inquiry.duplicateCount} dup
-                        </span>
-                      ) : null}
-                    </td>
-                    <td className="p-3 text-xs text-slate-700">{inquiry.phone || '—'}</td>
-                    <td className="p-3 text-xs text-slate-600 truncate max-w-[160px]">{inquiry.email || '—'}</td>
-                    <td className="p-3 text-[10px] font-bold text-slate-500 uppercase">{inquiry.service || '—'}</td>
-                    <td className="p-3 text-[11px] text-slate-600 whitespace-pre-wrap max-w-[220px]">
-                      {inquiry.message ? `"${inquiry.message}"` : '—'}
-                    </td>
-                    <td className="p-3">
-                      <Textarea
-                        rows={2}
-                        className="text-[11px] min-h-[52px] resize-y"
-                        value={noteVal}
-                        disabled={savingNotesId === inquiry.id}
-                        onChange={(e) => setNotesDraft((prev) => ({ ...prev, [inquiry.id]: e.target.value }))}
-                        placeholder="Internal follow-up notes…"
-                      />
-                      <div className="mt-1 flex items-center gap-2">
-                        <button
-                          type="button"
-                          className="text-[9px] font-black uppercase text-teal-700 hover:underline disabled:opacity-40"
-                          disabled={savingNotesId === inquiry.id}
-                          onClick={() => void saveStaffNotes(inquiry)}
-                        >
-                          Save notes
-                        </button>
-                        {inquiry.staffNotesUpdatedAt && (
-                          <span className="text-[9px] text-slate-400">
-                            {format(new Date(inquiry.staffNotesUpdatedAt), 'MMM d, h:mm a')}
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="p-3 text-[10px] text-slate-500 tabular-nums whitespace-nowrap">
-                      {inquiry.submittedAt ? format(new Date(inquiry.submittedAt), 'MM/dd/yyyy') : '—'}
-                    </td>
-                    <td className="p-3">
-                      <span
-                        className={cn(
-                          'text-[9px] font-bold px-2 py-1 rounded uppercase',
-                          inquiry.status === 'in_progress' && 'bg-amber-50 text-amber-700',
-                          inquiry.status === 'converted' && 'bg-teal-50 text-teal-700',
-                          inquiry.status === 'new' && 'bg-slate-100 text-slate-600'
-                        )}
-                      >
-                        {STATUS_LABELS[inquiry.status]}
-                      </span>
-                    </td>
-                    <td className="p-3 pr-4">
-                      <div className="flex flex-col gap-2 min-w-[200px]">
-                        <Select
-                          value={closeReason}
-                          disabled={busy}
-                          onChange={(e) =>
-                            setCloseReasonDraft((prev) => ({
-                              ...prev,
-                              [inquiry.id]: e.target.value,
-                            }))
-                          }
-                          className="h-8 text-[11px] font-semibold border-slate-200"
-                          aria-label={`Why not booked for ${inquiry.name}`}
-                        >
-                          <option value="">Select reason…</option>
-                          {INQUIRY_NOT_BOOKED_REASONS.map((reason) => (
-                            <option key={reason.id} value={reason.id}>
-                              {reason.label}
-                            </option>
-                          ))}
-                        </Select>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          disabled={busy || !closeReason}
-                          onClick={() => void handleCloseInquiry(inquiry)}
-                          className="h-8 text-[9px] font-black uppercase border-rose-200 text-rose-700 hover:bg-rose-50 hover:text-rose-800"
-                        >
-                          {busy ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          ) : (
-                            <>
-                              <Trash2 className="h-3.5 w-3.5 mr-1" />
-                              Delete
-                            </>
-                          )}
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+            <>
+              <div className="overflow-hidden overflow-x-auto max-h-[calc(100vh-16rem)] overflow-y-auto border border-slate-200 rounded-xl">
+                <table className="w-full text-left text-sm min-w-[1100px]">
+                  <thead className="sticky top-0 z-10 bg-slate-50 border-b border-slate-200 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                    <tr>
+                      <th className="p-3 pl-4">Name</th>
+                      <th className="p-3">Phone</th>
+                      <th className="p-3">Email</th>
+                      <th className="p-3">Service</th>
+                      <th className="p-3 min-w-[180px]">Message</th>
+                      <th className="p-3 min-w-[200px]">Staff notes</th>
+                      <th className="p-3">Submitted</th>
+                      <th className="p-3">Status</th>
+                      <th className="p-3 pr-4 min-w-[220px]">Why not booked</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {visibleInquiryRows.map((inquiry) => {
+                      const noteVal = notesDraft[inquiry.id] ?? inquiry.staffNotes ?? '';
+                      const closeReason = closeReasonDraft[inquiry.id] ?? inquiry.notBookedReason ?? '';
+                      const busy = updatingId === inquiry.id;
+                      return (
+                        <tr key={inquiry.id} className="align-top hover:bg-slate-50/80">
+                          <td className="p-3 pl-4 font-semibold text-slate-900">
+                            {inquiry.name}
+                            {inquiry.duplicateCount ? (
+                              <span className="ml-1 text-[9px] font-semibold text-amber-600 uppercase">
+                                +{inquiry.duplicateCount} dup
+                              </span>
+                            ) : null}
+                          </td>
+                          <td className="p-3 text-xs text-slate-700">{inquiry.phone || '—'}</td>
+                          <td className="p-3 text-xs text-slate-600 truncate max-w-[160px]">{inquiry.email || '—'}</td>
+                          <td className="p-3 text-[10px] font-medium text-slate-500 uppercase">{inquiry.service || '—'}</td>
+                          <td className="p-3 text-[11px] text-slate-600 whitespace-pre-wrap max-w-[220px]">
+                            {inquiry.message ? `"${inquiry.message}"` : '—'}
+                          </td>
+                          <td className="p-3">
+                            <Textarea
+                              rows={2}
+                              className="text-[11px] min-h-[52px] resize-y rounded-xl"
+                              value={noteVal}
+                              disabled={savingNotesId === inquiry.id}
+                              onChange={(e) => setNotesDraft((prev) => ({ ...prev, [inquiry.id]: e.target.value }))}
+                              placeholder="Internal follow-up notes…"
+                            />
+                            <div className="mt-1 flex items-center gap-2">
+                              <button
+                                type="button"
+                                className="text-[10px] font-semibold text-teal-700 hover:underline disabled:opacity-40"
+                                disabled={savingNotesId === inquiry.id}
+                                onClick={() => void saveStaffNotes(inquiry)}
+                              >
+                                Save notes
+                              </button>
+                              {inquiry.staffNotesUpdatedAt && (
+                                <span className="text-[9px] text-slate-400">
+                                  {format(new Date(inquiry.staffNotesUpdatedAt), 'MMM d, h:mm a')}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="p-3 text-[10px] text-slate-500 tabular-nums whitespace-nowrap">
+                            {inquiry.submittedAt ? format(new Date(inquiry.submittedAt), 'MM/dd/yyyy') : '—'}
+                          </td>
+                          <td className="p-3">
+                            <span
+                              className={cn(
+                                'text-[9px] font-semibold px-2 py-1 rounded-lg uppercase',
+                                inquiry.status === 'in_progress' && 'bg-amber-50 text-amber-700',
+                                inquiry.status === 'converted' && 'bg-teal-50 text-teal-700',
+                                inquiry.status === 'new' && 'bg-slate-100 text-slate-600'
+                              )}
+                            >
+                              {STATUS_LABELS[inquiry.status]}
+                            </span>
+                          </td>
+                          <td className="p-3 pr-4">
+                            <div className="flex flex-col gap-2 min-w-[200px]">
+                              <Select
+                                value={closeReason}
+                                disabled={busy}
+                                onChange={(e) =>
+                                  setCloseReasonDraft((prev) => ({
+                                    ...prev,
+                                    [inquiry.id]: e.target.value,
+                                  }))
+                                }
+                                className="h-8 text-[11px] font-medium border-slate-200 rounded-xl"
+                                aria-label={`Why not booked for ${inquiry.name}`}
+                              >
+                                <option value="">Select reason…</option>
+                                {INQUIRY_NOT_BOOKED_REASONS.map((reason) => (
+                                  <option key={reason.id} value={reason.id}>
+                                    {reason.label}
+                                  </option>
+                                ))}
+                              </Select>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                disabled={busy || !closeReason}
+                                onClick={() => void handleCloseInquiry(inquiry)}
+                                className="h-8 text-[10px] font-semibold rounded-xl border-rose-200 text-rose-700 hover:bg-rose-50"
+                              >
+                                {busy ? 'Saving…' : 'Close inquiry'}
+                              </Button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div className="flex flex-col items-center gap-2 py-2">
+                <p className="text-xs text-slate-500">
+                  Showing {visibleInquiryRows.length.toLocaleString()} of {inquiryListTotal.toLocaleString()}
+                </p>
+                {inquiryHasMore ? <div ref={inquirySentinelRef} className="h-8 w-full" aria-hidden /> : null}
+              </div>
+            </>
           )}
         </div>
       )}

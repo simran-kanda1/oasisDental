@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useInfiniteList } from '../hooks/useInfiniteList';
 import {
   doc,
   setDoc,
@@ -32,7 +33,6 @@ import { PatientProfileTrigger } from '../components/PatientProfileTrigger';
 import { QUEUE_ROW_TRACKING_COLLECTION, queueTrackingDocId } from '../lib/queueRowTracking';
 import type { QueueRowTrackingDoc } from '../lib/queueRowTracking';
 import { getNotRebookedReasonOptionsForQueue, queueReasonRemovalPatch } from '../lib/notRebookedReasons';
-import { Search } from 'lucide-react';
 import { Textarea } from '../components/ui/textarea';
 import { Input } from '../components/ui/input';
 import { Button } from '../components/ui/button';
@@ -40,6 +40,7 @@ import { useNavBadges } from '../contexts/NavBadgeContext';
 import { useFrontDeskData } from '../contexts/FrontDeskDataContext';
 import { DEFAULT_AGE_BUCKET, DEFAULT_WEEK_BUCKET } from '../lib/navBadgeCounts';
 import { format } from 'date-fns';
+import { PageLoadingPanel } from '../components/ui/skeleton';
 
 const AGE_OPTIONS: { id: AgeBucketFilter; label: string }[] = [
   { id: 'all', label: 'All dates' },
@@ -127,10 +128,17 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
   const resolvedInitialQueueId =
     initialQueueId && getFrontDeskQueueDef(initialQueueId) ? initialQueueId : FRONT_DESK_QUEUE_DEFS[0].id;
   const [activeId, setActiveId] = useState(resolvedInitialQueueId);
+  /** Hub queue list stays collapsed so the table has full width; open via Queues. */
+  const [queueNavOpen, setQueueNavOpen] = useState(false);
 
   useEffect(() => {
     if (initialQueueId && getFrontDeskQueueDef(initialQueueId)) setActiveId(initialQueueId);
   }, [initialQueueId]);
+
+  const selectQueue = (queueId: string) => {
+    setActiveId(queueId);
+    setQueueNavOpen(false);
+  };
   const [ageBucket, setAgeBucket] = useState<AgeBucketFilter>(DEFAULT_AGE_BUCKET);
   const [visitWeekBucket, setVisitWeekBucket] = useState<VisitWeekBucketFilter>(DEFAULT_WEEK_BUCKET);
   const [gaTimeFilter, setGaTimeFilter] = useState<GaAppointmentTimeFilter>('all');
@@ -213,6 +221,13 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
       return av.localeCompare(bv) * dir;
     });
   }, [queueRows, sectionSearch, sortKey, sortDir, mergedTrackingByApptId]);
+
+  const {
+    total: queueListTotal,
+    visibleItems: visibleQueueRows,
+    hasMore: queueHasMore,
+    sentinelRef: queueSentinelRef,
+  } = useInfiniteList(displayedQueueRows, 40, `${activeId}|${sectionSearch}|${sortKey}|${sortDir}`);
 
   const toggleSort = (key: typeof sortKey) => {
     if (sortKey === key) {
@@ -337,7 +352,7 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
   const apptDateColumnLabel = isGaQueue && gaTimeFilter === 'upcoming_4mo' ? 'Appt date' : 'Last appt';
   const showColumnSort = activeId === 'emerg_follow_up' || isStandaloneQueue;
 
-  const showMainLoader = isNoApptBookedQueue ? false : appointmentsLoading;
+  const showMainLoader = appointmentsLoading;
   const showLedgerPendingBanner = !isNoApptBookedQueue && ledgerLoading;
   const showLedgerSectionLoader =
     !isNoApptBookedQueue && ledgerLoading && queueRequiresLedgerForDisplay(activeId);
@@ -348,13 +363,22 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
 
   return (
     <div className={cn('flex min-h-[calc(100vh-3rem)] bg-slate-50/80 font-sans', !isStandaloneQueue && 'flex-col md:flex-row')}>
-      {!isStandaloneQueue && (
+      {!isStandaloneQueue && queueNavOpen && (
         <aside className="w-full md:w-56 shrink-0 border-b md:border-b-0 md:border-r border-slate-200 bg-white p-3 overflow-y-auto max-h-[36vh] md:max-h-none">
-          <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest px-2 mb-2">No future appointments</p>
+          <div className="flex items-center justify-between gap-2 px-2 mb-2">
+            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">No future appointments</p>
+            <button
+              type="button"
+              onClick={() => setQueueNavOpen(false)}
+              className="shrink-0 rounded-md border border-slate-200 px-2 py-1 text-[9px] font-bold uppercase tracking-wide text-slate-500 hover:bg-slate-50"
+            >
+              Hide
+            </button>
+          </div>
           <nav className="space-y-0.5">
             <button
               type="button"
-              onClick={() => setActiveId(NO_APPT_BOOKED_QUEUE_ID)}
+              onClick={() => selectQueue(NO_APPT_BOOKED_QUEUE_ID)}
               className={cn(
                 'w-full flex items-center gap-2 text-left px-3 py-2 rounded-lg text-[10px] font-bold uppercase tracking-tight transition-colors',
                 activeId === NO_APPT_BOOKED_QUEUE_ID
@@ -370,7 +394,7 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
                 key={q.id}
                 type="button"
                 title={getQueueCodeRulesLabel(q.id) ? `ADA: ${getQueueCodeRulesLabel(q.id)}` : undefined}
-                onClick={() => setActiveId(q.id)}
+                onClick={() => selectQueue(q.id)}
                 className={cn(
                   'w-full flex items-center gap-2 text-left px-3 py-2 rounded-lg text-[10px] font-bold uppercase tracking-tight transition-colors',
                   activeId === q.id ? 'bg-teal-50 text-teal-800 border border-teal-100' : 'text-slate-600 hover:bg-slate-50 border border-transparent'
@@ -383,7 +407,21 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
           </nav>
         </aside>
       )}
-      <main className="flex-1 p-4 md:p-6 overflow-auto">
+      <main className="flex-1 p-4 md:p-6 overflow-auto min-w-0">
+        {!isStandaloneQueue && !queueNavOpen && (
+          <div className="mb-3">
+            <button
+              type="button"
+              onClick={() => setQueueNavOpen(true)}
+              className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-slate-50 hover:border-slate-300"
+            >
+              Queues
+              <span className="rounded-full bg-teal-50 px-1.5 py-0.5 text-[9px] font-black text-teal-800 normal-case tracking-normal">
+                {activeDef?.label ?? 'Open'}
+              </span>
+            </button>
+          </div>
+        )}
         {isNoApptBookedQueue ? (
           <FollowUpsPage embedded />
         ) : (
@@ -484,7 +522,7 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
         </div>
 
         {showMainLoader ? (
-          <div className="p-24 text-center text-[10px] font-black text-slate-300 uppercase tracking-widest">Loading…</div>
+          <PageLoadingPanel message={`Loading ${activeDef.label}…`} />
         ) : (
           <div className="rounded-lg border border-slate-200 bg-white p-4 space-y-4 shadow-sm">
             {showLedgerPendingBanner ? (
@@ -494,7 +532,6 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
             ) : null}
             <div className="flex flex-col sm:flex-row sm:items-center gap-3">
               <div className="relative flex-1 max-w-xl">
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                 <Input
                   placeholder="Search this section: patient, detail, provider, date…"
                   value={sectionSearch}
@@ -528,9 +565,10 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
             </div>
 
             {showLedgerSectionLoader ? (
-              <div className="p-12 text-center border border-dashed border-slate-200 rounded-md text-xs text-slate-400 font-bold uppercase tracking-widest">
-                Loading ledger data for this queue…
-              </div>
+              <PageLoadingPanel
+                message="Loading procedure data for this queue…"
+                className="min-h-[16rem] border border-dashed border-slate-200 rounded-md"
+              />
             ) : displayedQueueRows.length === 0 ? (
               <div className="p-12 text-center border border-dashed border-slate-200 rounded-md text-xs text-slate-400 font-bold uppercase tracking-widest">
                 {queueRows.length === 0
@@ -625,7 +663,7 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                  {displayedQueueRows.map((row) => {
+                  {visibleQueueRows.map((row) => {
                     const tr = mergedTrackingByApptId[row.appointmentFirestoreId];
                     const draftKey = row.appointmentFirestoreId;
                     const noteVal =
@@ -851,6 +889,13 @@ const FrontDeskQueuesPage: React.FC<FrontDeskQueuesPageProps> = ({ initialQueueI
                   })}
               </tbody>
             </table>
+
+          <div className="flex flex-col items-center gap-2 py-4">
+            <p className="text-xs text-slate-500">
+              Showing {visibleQueueRows.length.toLocaleString()} of {queueListTotal.toLocaleString()}
+            </p>
+            {queueHasMore ? <div ref={queueSentinelRef} className="h-8 w-full" aria-hidden /> : null}
+          </div>
           </div>
             )}
           </div>

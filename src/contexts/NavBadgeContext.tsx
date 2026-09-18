@@ -8,11 +8,16 @@ import {
   filterEstimateCandidateDocuments,
   fetchEstimateDocuments,
   ESTIMATE_DOCUMENTS_BADGE_LIMIT,
-  isPredApprovedDocumentStatus,
-  isPredFollowUpDocumentStatus,
   DEFAULT_ESTIMATE_DOCUMENT_LOOKBACK,
 } from '../lib/documentEstimates';
 import { fetchAttachmentsForDocIds } from '../lib/documentAttachments';
+import {
+  buildLedgerEstimateSeeds,
+  countEstimateOpenWorkByTab,
+  fetchRecentLedgerRows,
+  mergeLedgerAndDocumentWorkItems,
+} from '../lib/estimateDiscovery';
+import { buildAdaByProccodeId } from '../lib/queueProcedureCodes';
 import {
   computeFrontDeskQueueCounts,
   frontDeskQueueTotal,
@@ -81,44 +86,58 @@ export const NavBadgeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   }, []);
 
   useEffect(() => {
-    if (!badgesReady) return;
+    if (!badgesReady || !procedureCodes.length) return;
 
     let cancelled = false;
 
     const loadEstimateBadges = () => {
       setEstimatesReady(false);
-      void fetchEstimateDocuments(db, ESTIMATE_DOCUMENTS_BADGE_LIMIT, { stopAtLookback: true })
-        .then((documents) => {
+      const adaByProccodeId = buildAdaByProccodeId(procedureCodes);
+
+      void Promise.all([
+        fetchEstimateDocuments(db, ESTIMATE_DOCUMENTS_BADGE_LIMIT, { stopAtLookback: true }),
+        fetchRecentLedgerRows(db, 6000),
+      ])
+        .then(async ([documents, ledgerRows]) => {
           if (cancelled) return;
           const candidates = filterEstimateCandidateDocuments(documents, DEFAULT_ESTIMATE_DOCUMENT_LOOKBACK);
           const docIds = candidates
             .map((d) => Number(d.docid ?? d.id))
             .filter((id) => Number.isFinite(id) && id > 0);
 
-          if (docIds.length === 0) {
-            startTransition(() => {
-              setEstimatePredApproved(0);
-              setEstimatePredFollowUp(0);
-            });
-            return;
+          const attachments = docIds.length ? await fetchAttachmentsForDocIds(db, docIds) : [];
+          if (cancelled) return;
+
+          const docIdToPatientId = buildDocIdToPatientIdMap(attachments);
+          const documentItems = buildDocumentEstimateWorkItems(documents, docIdToPatientId, patientsById, {
+            lookback: DEFAULT_ESTIMATE_DOCUMENT_LOOKBACK,
+          });
+
+          const documentsByPatientId = new Map<string, typeof documents>();
+          for (const document of documents) {
+            const docId = Number(document.docid ?? document.id);
+            const patientId = docIdToPatientId.get(docId);
+            if (!patientId) continue;
+            const list = documentsByPatientId.get(patientId) ?? [];
+            list.push(document);
+            documentsByPatientId.set(patientId, list);
           }
 
-          return fetchAttachmentsForDocIds(db, docIds).then((attachments) => {
-            if (cancelled) return;
-            const docIdToPatientId = buildDocIdToPatientIdMap(attachments);
-            const items = buildDocumentEstimateWorkItems(documents, docIdToPatientId, {}, {
-              lookback: DEFAULT_ESTIMATE_DOCUMENT_LOOKBACK,
-            });
-            startTransition(() => {
-              setEstimatePredApproved(items.filter((i) => isPredApprovedDocumentStatus(i.workflowStatus)).length);
-              setEstimatePredFollowUp(
-                items.filter((i) => isPredFollowUpDocumentStatus(i.workflowStatus)).length
-              );
-            });
+          const seeds = buildLedgerEstimateSeeds(ledgerRows, adaByProccodeId);
+          const merged = mergeLedgerAndDocumentWorkItems({
+            ledgerSeeds: seeds,
+            documentItems,
+            documentsByPatientId,
+            patientsById,
+          });
+          const counts = countEstimateOpenWorkByTab(merged);
+          startTransition(() => {
+            setEstimatePredApproved(counts.predApproved);
+            setEstimatePredFollowUp(counts.predFollowUp);
           });
         })
         .catch((err) => {
-          console.error('estimate documents fetch failed', err);
+          console.error('estimate badge fetch failed', err);
         })
         .finally(() => {
           if (!cancelled) setEstimatesReady(true);
@@ -138,7 +157,7 @@ export const NavBadgeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [badgesReady]);
+  }, [badgesReady, procedureCodes, patientsById]);
 
   useEffect(() => {
     let cancelled = false;
@@ -181,7 +200,15 @@ export const NavBadgeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       badgesReady,
       estimatesReady,
     }),
-    [openInquiries, hiddenInquiries, estimatePredApproved, estimatePredFollowUp, frontDeskByQueue, badgesReady, estimatesReady]
+    [
+      openInquiries,
+      hiddenInquiries,
+      estimatePredApproved,
+      estimatePredFollowUp,
+      frontDeskByQueue,
+      badgesReady,
+      estimatesReady,
+    ]
   );
 
   return <NavBadgeContext.Provider value={value}>{children}</NavBadgeContext.Provider>;

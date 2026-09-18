@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react';
 import { collection, doc, getDocs, limit, onSnapshot, query, where } from 'firebase/firestore';
-import { X, Phone, MapPin, Mail, Copy, User } from 'lucide-react';
 import { db } from '../lib/firebase';
 import { resolvePatientFirestoreDocId } from '../lib/resolvePatientFirestoreDoc';
 import {
@@ -146,11 +145,11 @@ export const PatientQuickProfileModal: React.FC<PatientQuickProfileModalProps> =
     const email = patient ? cleanDentrixText(patient.email) : '';
     const statusHint = patient
         ? Number(patient.status) === 2
-            ? 'Non-patient record (Dentrix)'
+            ? 'Non-patient record'
             : Number(patient.status) === 4
-              ? 'Archived patient (Dentrix)'
+              ? 'Archived patient'
               : Number(patient.status) === 3
-                ? 'Inactive patient (Dentrix)'
+                ? 'Inactive patient'
                 : null
         : null;
 
@@ -175,15 +174,13 @@ export const PatientQuickProfileModal: React.FC<PatientQuickProfileModalProps> =
                 <div className="flex items-start justify-between gap-3 border-b border-slate-100 bg-slate-50/80 px-4 py-3 shrink-0">
                     <div className="min-w-0 flex items-start gap-2">
                         <div className="mt-0.5 rounded-lg bg-teal-100 p-1.5 text-teal-700">
-                            <User size={16} />
                         </div>
                         <div className="min-w-0">
                             <h2 id="patient-profile-title" className="text-sm font-black text-slate-900 uppercase tracking-tight truncate">
                                 {displayName}
                             </h2>
-                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">
-                                Dentrix ID {patientLookupId}
-                                {patient?.patient_guid ? ` · ${cleanDentrixText(patient.patient_guid).slice(0, 8)}…` : ''}
+                            <p className="text-[10px] font-medium text-slate-400 mt-0.5">
+                                Patient ID {patientLookupId}
                             </p>
                             {statusHint && (
                                 <span className="mt-1 inline-block rounded border border-amber-200 bg-amber-50 px-2 py-0.5 text-[9px] font-black uppercase text-amber-800">
@@ -195,10 +192,9 @@ export const PatientQuickProfileModal: React.FC<PatientQuickProfileModalProps> =
                     <button
                         type="button"
                         onClick={onClose}
-                        className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-200 hover:text-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
-                        aria-label="Close"
+                        className="rounded-lg px-2 py-1.5 text-xs font-medium text-slate-500 hover:bg-slate-200 hover:text-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
                     >
-                        <X size={18} />
+                        Close
                     </button>
                 </div>
 
@@ -207,9 +203,9 @@ export const PatientQuickProfileModal: React.FC<PatientQuickProfileModalProps> =
                         <p className="text-center text-[11px] font-bold text-slate-400 uppercase tracking-widest py-8">Loading patient…</p>
                     ) : resolveError || !patient ? (
                         <div className="rounded-lg border border-amber-100 bg-amber-50/80 p-3 text-[11px] text-amber-900">
-                            <p className="font-bold">No synced patient record found.</p>
+                            <p className="font-bold">Patient record not found</p>
                             <p className="mt-1 text-amber-800/90 leading-snug">
-                                This ID may not be in Firestore yet, or the patient document uses a different key. Staff can still use Dentrix for full details.
+                                This patient ID may be outdated. Check the chart for full details.
                             </p>
                         </div>
                     ) : (
@@ -222,7 +218,6 @@ export const PatientQuickProfileModal: React.FC<PatientQuickProfileModalProps> =
                                     ) : null}
                                     {(mobile || home) && (
                                         <div className="flex items-start gap-2 rounded-lg border border-slate-100 bg-slate-50/50 p-2">
-                                            <Phone size={14} className="mt-0.5 shrink-0 text-teal-600" />
                                             <div className="min-w-0 flex-1 space-y-1">
                                                 {mobile ? (
                                                     <div className="flex items-center justify-between gap-2">
@@ -234,7 +229,6 @@ export const PatientQuickProfileModal: React.FC<PatientQuickProfileModalProps> =
                                                             className="h-7 px-2 text-[10px] font-bold uppercase"
                                                             onClick={() => copyText('mobile', mobile)}
                                                         >
-                                                            <Copy size={12} className="mr-1" />
                                                             Copy
                                                         </Button>
                                                     </div>
@@ -251,7 +245,6 @@ export const PatientQuickProfileModal: React.FC<PatientQuickProfileModalProps> =
                                     )}
                                     {email ? (
                                         <div className="flex items-start gap-2 rounded-lg border border-slate-100 bg-slate-50/50 p-2">
-                                            <Mail size={14} className="mt-0.5 shrink-0 text-teal-600" />
                                             <div className="min-w-0 flex-1">
                                                 <div className="flex items-center justify-between gap-2">
                                                     <span className="text-[11px] font-semibold text-slate-800">Email</span>
@@ -262,7 +255,6 @@ export const PatientQuickProfileModal: React.FC<PatientQuickProfileModalProps> =
                                                         className="h-7 px-2 text-[10px] font-bold uppercase"
                                                         onClick={() => copyText('email', email)}
                                                     >
-                                                        <Copy size={12} className="mr-1" />
                                                         Copy
                                                     </Button>
                                                 </div>
@@ -284,7 +276,6 @@ export const PatientQuickProfileModal: React.FC<PatientQuickProfileModalProps> =
 
                             <section>
                                 <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-2 flex items-center gap-1">
-                                    <MapPin size={10} />
                                     Address
                                 </p>
                                 {address ? (
@@ -335,7 +326,7 @@ export const PatientQuickProfileModal: React.FC<PatientQuickProfileModalProps> =
                             <section>
                                 <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-2">Notes on record</p>
                                 {notesBlocks.length === 0 ? (
-                                    <p className="text-xs text-slate-500 italic">No notes synced for this patient.</p>
+                                    <p className="text-xs text-slate-500 italic">No notes on file for this patient.</p>
                                 ) : (
                                     <div className="space-y-2">
                                         {notesBlocks.map((b) => (

@@ -15,6 +15,8 @@ export type EstimateSentSource = 'appointment' | 'ledger' | 'document';
 export interface EstimateSentVisit {
   label: string;
   source: EstimateSentSource;
+  /** Calendar date used for sorting (most recently sent first). */
+  at: Date;
 }
 
 export function formatAppointmentDateTimeLabel(appt: DentrixAppointmentDoc): string | null {
@@ -106,16 +108,20 @@ export function resolveEstimateSentVisit(options: {
   }
 
   if (bestAppt) {
+    const at = parseDentrixDate(bestAppt.appointment_date);
     const label = formatAppointmentDateTimeLabel(bestAppt);
-    if (label) return { label, source: 'appointment' };
+    if (label && at) return { label, source: 'appointment', at };
   }
 
   const earliestLedger = [...ledgerDates].sort((a, b) => a.getTime() - b.getTime())[0];
   if (earliestLedger) {
-    return { label: format(earliestLedger, 'yyyy-MM-dd'), source: 'ledger' };
+    return { label: format(earliestLedger, 'yyyy-MM-dd'), source: 'ledger', at: earliestLedger };
   }
 
-  const docLabel = formatDentrixDateKey(options.documentDate);
-  if (docLabel) return { label: docLabel, source: 'document' };
+  if (docDate) {
+    const docLabel = formatDentrixDateKey(options.documentDate);
+    if (docLabel) return { label: docLabel, source: 'document', at: docDate };
+  }
   return null;
 }
+

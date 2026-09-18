@@ -868,8 +868,7 @@ function buildGaAllAppointmentsQueue(
   }
 
   return rows
-    .sort((a, b) => (b.dateLabel ?? '').localeCompare(a.dateLabel ?? ''))
-    .slice(0, 400);
+    .sort((a, b) => (b.dateLabel ?? '').localeCompare(a.dateLabel ?? ''));
 }
 
 function buildCategoryQueue(
@@ -897,7 +896,6 @@ function buildCategoryQueue(
       return matchesAgeBucket(monthsSinceAppt(a, now), ageBucket);
     })
     .sort((a, b) => (b.appointment_date ?? '').localeCompare(a.appointment_date ?? ''))
-    .slice(0, 400)
     .map((a) => {
       const row = apptRow(a, patientsById, now);
       if (!row) return null;
@@ -1068,7 +1066,6 @@ function buildCategoryQueueWeekBucket(
       return matchesVisitWeekBucket(daysSince, weekBucket);
     })
     .sort((a, b) => (b.appointment_date ?? '').localeCompare(a.appointment_date ?? ''))
-    .slice(0, 400)
     .map((a) => apptRow(a, patientsById, now))
     .filter((r): r is QueueRow => !!r);
 }
@@ -1148,7 +1145,6 @@ export function buildQueueRows(
         return matchesAgeBucket(m, ageBucket) && m !== null && m >= 0;
       })
       .sort((a, b) => (b.appointment_date ?? '').localeCompare(a.appointment_date ?? ''))
-      .slice(0, 400)
       .map((a) => {
         const row = apptRow(a, patientsById, now);
         if (!row) return null;

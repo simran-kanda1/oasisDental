@@ -52,7 +52,7 @@ export interface WixInquiry {
     notBookedReason?: string;
     closedAt?: string;
     closedBy?: string;
-    /** True when phone matches a Dentrix patient — hidden from inbox and open counts */
+    /** True when phone matches an existing patient — hidden from inbox and open counts */
     phoneMatchExcluded?: boolean;
     wixContactId?: string;
     wixSubmissionId?: string;
@@ -63,25 +63,4 @@ export interface WixInquiry {
     staffNotesUpdatedAt?: string;
     staffNotesBy?: string;
     duplicateOf?: string;
-}
-
-export interface EmailCampaign {
-    id: string;
-    month: string;
-    year: number;
-    subject: string;
-    template: string;
-    status: 'draft' | 'scheduled' | 'sent';
-    scheduledDate?: string;
-    sentDate?: string;
-    openRate?: number;
-    clickRate?: number;
-}
-
-export interface WeaveContact {
-    id: string;
-    name: string;
-    phone: string;
-    lastContact?: string;
-    status: 'active' | 'inactive';
 }

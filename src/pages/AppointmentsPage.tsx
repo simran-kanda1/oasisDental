@@ -59,7 +59,7 @@ const AppointmentsPage: React.FC = () => {
                         <h1 className="text-3xl font-black text-slate-900 tracking-tighter uppercase leading-none">
                             {format(weekStart, 'MMMM yyyy')}
                         </h1>
-                        <p className="text-[10px] font-black text-slate-300 uppercase tracking-[0.2em] mt-2">Clinic Queue Node</p>
+                        <p className="text-xs text-slate-500 mt-1">Weekly schedule</p>
                     </div>
                     <div className="flex items-center bg-white border border-slate-100 rounded-2xl shadow-sm overflow-hidden p-1">
                         <Button variant="ghost" className="h-9 px-6 text-[10px] font-black uppercase tracking-widest text-slate-400 hover:text-slate-900 rounded-xl" onClick={() => setCurrentDate(addDays(currentDate, -7))}>Back</Button>
@@ -67,8 +67,8 @@ const AppointmentsPage: React.FC = () => {
                         <Button variant="ghost" className="h-9 px-6 text-[10px] font-black uppercase tracking-widest text-slate-400 hover:text-slate-900 rounded-xl" onClick={() => setCurrentDate(addDays(currentDate, 7))}>Next</Button>
                     </div>
                 </div>
-                <div className="bg-teal-50 px-4 h-12 rounded-2xl border border-teal-100 text-[10px] font-black uppercase tracking-[0.2em] text-teal-700 flex items-center">
-                    Live Dentrix Schedule
+                <div className="bg-teal-50 px-4 h-12 rounded-2xl border border-teal-100 text-xs font-medium text-teal-700 flex items-center">
+                    Appointments
                 </div>
             </div>
 
@@ -87,7 +87,7 @@ const AppointmentsPage: React.FC = () => {
 
                 <div className="overflow-y-auto max-h-[calc(100vh-280px)] scrollbar-none">
                     {loading ? (
-                        <div className="p-40 text-center uppercase text-[10px] font-black opacity-10 tracking-[0.3em]">Syncing...</div>
+                        <div className="p-40 text-center text-sm text-slate-400">Loading schedule…</div>
                     ) : (
                         hours.map((hour) => (
                             <div key={hour} className="grid grid-cols-[80px_repeat(6,1fr)] border-b border-slate-50 last:border-0 min-h-[140px] group">
